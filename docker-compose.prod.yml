@@ -1,0 +1,46 @@
+services:
+  tron-core:
+    build: .
+    container_name: tron-core
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TRON_HOST=0.0.0.0
+      - TRON_PORT=9000
+    expose:
+      - "9000"
+
+  tron-dashboard:
+    build: .
+    container_name: tron-dashboard
+    restart: unless-stopped
+    command: streamlit run dashboard_v3.py --server.port 8501 --server.address 0.0.0.0
+    expose:
+      - "8501"
+
+  nginx:
+    image: nginx:stable-alpine
+    container_name: tron-nginx
+    restart: unless-stopped
+    depends_on:
+      - tron-core
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/tron.conf:/etc/nginx/conf.d/tron.conf:ro
+      - ./deploy/nginx/letsencrypt:/etc/letsencrypt
+      - ./deploy/nginx/html:/usr/share/nginx/html:ro
+      - ./deploy/nginx/html:/var/www/certbot:rw
+      - ./deploy/nginx/ssl:/etc/nginx/conf.d/ssl:ro
+
+  certbot:
+    image: certbot/certbot:v2.9.0
+    container_name: tron-certbot
+    depends_on:
+      - nginx
+    volumes:
+      - ./deploy/nginx/letsencrypt:/etc/letsencrypt
+      - ./deploy/nginx/html:/var/www/certbot
+    command: ["certbot", "certonly", "--webroot", "--webroot-path=/var/www/certbot", "--email", "${CERTBOT_EMAIL}", "--agree-tos", "--no-eff-email", "-d", "${DOMAIN}"]
+    restart: "no"

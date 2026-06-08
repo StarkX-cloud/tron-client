@@ -1,0 +1,18 @@
+[Unit]
+Description=TRON Core Docker Compose Service
+Requires=docker.service
+After=docker.service network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tron
+Environment=TRON_HOST=0.0.0.0
+Environment=TRON_PORT=9000
+Environment=TRON_RELOAD=false
+ExecStart=/usr/bin/docker compose -f /opt/tron/docker-compose.prod.yml up --build
+ExecStop=/usr/bin/docker compose -f /opt/tron/docker-compose.prod.yml down
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

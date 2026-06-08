@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=63.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tron-client"
+version = "0.1.0"
+description = "Local-first Python distributed execution runtime for developers."
+readme = "QUICKSTART.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "TRON" }
+]
+keywords = ["tron", "distributed", "python", "workflow", "developer", "local-first"]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Framework :: AsyncIO",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Distributed Computing",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "fastapi==0.125.0",
+    "uvicorn==0.49.0",
+    "requests==2.32.0",
+    "cloudpickle==3.0.0",
+    "pydantic==1.10.26",
+    "streamlit==1.58.0",
+    "pandas==3.0.3",
+    "numpy==2.1.3",
+    "streamlit-autorefresh==1.0.1",
+]
+
+[tool.setuptools]
+py-modules = ["tron_sdk", "job"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tron*", "tkron*"]

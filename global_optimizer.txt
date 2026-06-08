@@ -1,0 +1,11 @@
+class GlobalOptimizer:
+
+    def evaluate(self, workers, queue, running_jobs):
+
+        return {
+            "throughput_score": self.throughput(workers, queue),
+            "latency_score": self.latency(workers, queue),
+            "cost_score": self.cost(workers),
+            "stability_score": self.stability(workers, running_jobs),
+            "swarm_health": self.health(workers)
+        }

@@ -1,0 +1,19 @@
+services:
+  tron-core:
+    build: .
+    container_name: tron-core
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TRON_HOST=0.0.0.0
+      - TRON_PORT=9000
+
+  tron-dashboard:
+    build: .
+    container_name: tron-dashboard
+    restart: unless-stopped
+    command: streamlit run dashboard_v3.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"

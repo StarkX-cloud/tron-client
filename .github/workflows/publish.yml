@@ -1,0 +1,50 @@
+name: Build and Publish (TestPyPI)
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install build deps
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Run tests
+        run: |
+          python -m pip install -r requirements.txt
+          pytest -q
+        continue-on-error: false
+
+      - name: Build sdist and wheel
+        run: python -m build --sdist --wheel
+
+      - name: Publish to TestPyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: |
+          python -m pip install --upgrade twine
+          python -m twine upload --repository testpypi dist/*
+
+      - name: Publish to PyPI (manual trigger)
+        if: false
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m pip install --upgrade twine
+          python -m twine upload dist/*
+
+# Notes:
+# - Push a tag like `v0.1.0` to trigger a TestPyPI publish.
+# - Set repository secrets `TEST_PYPI_API_TOKEN` and `PYPI_API_TOKEN` in GitHub.
+# - Adjust Python version or test steps as needed.
