@@ -96,6 +96,16 @@ tron.add_server("local", "http://127.0.0.1:9000")
 tron.config(name="local")
 ```
 
+To start a local TRON server and worker from the SDK:
+
+```python
+import tron
+
+tron.start_local_environment()
+```
+
+This starts both the local queue server and a worker automatically so developers can work without explicit infrastructure commands.
+
 To start a local TRON server from the SDK:
 
 ```python

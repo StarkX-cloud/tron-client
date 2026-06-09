@@ -37,3 +37,6 @@ py-modules = ["tron_sdk", "job"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["tron*", "tkron*"]
+
+[project.scripts]
+tron = "tron.cli:main"

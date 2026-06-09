@@ -26,7 +26,15 @@ result = expensive_task(10).get()
 
 With the current SDK, developers can treat TRON as a client-first platform: the SDK auto-discovers or starts a local runtime as needed, so they rarely need to run `queue_server.py` manually.
 
-For local development, the SDK also supports worker lifecycle helpers:
+For local development, the SDK also supports launching a complete local runtime automatically:
+
+```python
+tron.start_local_environment()
+# ... run remote tasks ...
+tron.stop_local_worker()
+```
+
+You can also start a worker directly if you want to control just the worker lifecycle:
 
 ```python
 tron.start_local_worker()

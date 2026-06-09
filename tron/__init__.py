@@ -23,6 +23,7 @@ from .config import (
     stop_local_server,
     start_local_worker,
     stop_local_worker,
+    start_local_environment,
 )
 from .magic_future import MagicFuture
 
@@ -48,6 +49,7 @@ __all__ = [
     "stop_local_server",
     "start_local_worker",
     "stop_local_worker",
+    "start_local_environment",
 
     # Legacy API (still works)
     "task",

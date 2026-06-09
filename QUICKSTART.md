@@ -52,6 +52,21 @@ That's literally it. TRON handles:
 - ✅ Error handling
 
 ---
+## Local development made even easier
+If you want TRON to start a local runtime for you, use:
+```python
+import tron
+
+tron.start_local_environment()
+```
+This launches a local TRON server and worker process automatically so you can work without manually running `queue_server.py`.
+
+You can also use the CLI after installation:
+```bash
+tron env start
+```
+
+---
 
 ## API Reference
 
