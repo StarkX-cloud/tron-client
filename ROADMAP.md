@@ -94,10 +94,34 @@ technical design behind each phase.
     size anyone can rerun and check in seconds — scaling to a real model
     size and an actual multi-machine network is substantial future work,
     not a claim this phase makes.
-  - [ ] Not yet done: running this across genuinely separate physical
-        machines over a real network (today all "shards" are in-process
-        Python objects on one machine — communication bytes are counted,
-        not actually transmitted over a wire yet).
+  - [x] **Over a real wire.** `tron/training/distributed/`: shards are
+        now separate OS processes that serialize their parameter vectors
+        and `POST` them to the master (`queue_server.py`'s
+        `/training/session*` endpoints), which stores each as a spine
+        Artifact, barrier-averages once every shard has reported for a
+        round (`protocol.average_vectors`), and serves the merge back.
+        `python -m tron.training.distributed.shard_worker --master <url>
+        --session <id> --shard <k>` is the per-process entry point;
+        pointing `--master` at another host is the *only* change needed
+        to run across genuinely separate machines (commit 3d6939b already
+        proved a real worker against a deployed Render instance works).
+        `examples/distributed_training/` runs it across local subprocesses
+        and against separate hosts. **The transport does not change the
+        math:** `tests/test_distributed_training.py`'s parity test drives
+        the full HTTP path through `fastapi.testclient` and asserts the
+        final merged model is bit-for-bit equal to
+        `local_sgd.train_local_sgd` in one process — same seeds, same
+        schedule, same averaging op. 9 tests (protocol round-trips, the
+        barrier's 202-until-ready behaviour, wire-byte accounting split
+        into upload+download legs, the bit-for-bit parity run, spine
+        recording). The run reports both `wire_bytes_transferred` (every
+        leg that actually crossed a socket) and `algorithmic_comm_bytes`
+        (the conceptual one-sync-per-shard figure the in-process metric
+        counts) so the comparison stays honest.
+    - [ ] Still open here: this is the **numpy MLP** over the wire. The
+          LoRA / Pythia-70M path isn't wired through this transport yet
+          (see the Phase 3 scale-up section) — that's the "real model
+          over a real network" combination.
   - [ ] Not yet done: a public writeup / standalone repo extraction — see
         the "getting noticed" discussion this phase was scoped around.
 - [x] **Phase 3 scale-up — same story, a real pretrained model.**

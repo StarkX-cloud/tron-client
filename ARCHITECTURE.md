@@ -104,6 +104,22 @@ model (bit-for-bit identical to the uninstrumented run).
 `POST /training/run_demo` triggers it against `queue_server.py`'s own
 spine — verified live, including in the Grid (see Phase 4 below).
 
+**Over a real wire.** `tron/training/distributed/` moves the shards out
+of the process: each is a separate OS process
+(`python -m tron.training.distributed.shard_worker`) that serializes its
+parameter vector and `POST`s it to the master over HTTP. The master
+(`queue_server.py`'s `/training/session*` endpoints, backed by
+`param_server.TrainingSession`) stores each vector as a content-addressed
+spine Artifact, barrier-averages once all shards have reported for a
+round, and serves the merge back for the next round.
+`tests/test_distributed_training.py` drives the full HTTP path through
+`fastapi.testclient` and asserts the final model is **bit-for-bit
+identical** to the single-process `train_local_sgd` — the transport
+changes where the bytes go, not what they are. Running across genuinely
+separate machines is then just a different `--master` URL. This is the
+numpy MLP; wiring the LoRA path through the same transport is still open
+(see ROADMAP.md).
+
 **Phase 3 scale-up — the same story on a real pretrained model.**
 `tron/training/lora_demo.py` / `benchmark_lora.py` run the identical
 local-SGD and merging comparison against EleutherAI's Pythia-70M via
