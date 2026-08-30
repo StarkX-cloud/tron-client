@@ -119,9 +119,24 @@ function foldTasks(events, uptoIndex) {
 // reloads (a name hash, not insertion order) -----------------------
 
 function hashAngle(name) {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) { h = (h * 31 + name.charCodeAt(i)) >>> 0; }
-  return (h % 360) * (Math.PI / 180);
+  // FNV-1a + a murmur3-style finalizer, not a plain polynomial hash.
+  // A plain `h = h*31 + charCode` hash was tried first and rejected: for
+  // sequential names sharing a prefix ("shard-0", "shard-1", "shard-2",
+  // ...) — the single most common worker-naming pattern in this system —
+  // it produced angles within a few degrees of each other (e.g. 89/90/91/92),
+  // stacking every shard node almost on top of itself instead of spreading
+  // them around the circle. The finalizer's extra mixing gives a real
+  // avalanche property: a 1-character difference scatters across the full
+  // 360 degrees instead of nudging the angle by a fraction of a degree.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < name.length; i++) {
+    h ^= name.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return ((h >>> 0) % 360) * (Math.PI / 180);
 }
 
 const MASTER_POS = new THREE.Vector3(0, 0, 0);

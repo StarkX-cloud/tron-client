@@ -10,9 +10,12 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch):
     # Import fresh each test so module-level state (job_queue, workers,
-    # topology, ...) doesn't leak between tests.
+    # topology, ...) doesn't leak between tests. TRON_SPINE_DIR isolates
+    # the on-disk event log / artifact store too — without it, reload
+    # does NOT reset those (see queue_server.py's _SPINE_DIR comment).
+    monkeypatch.setenv("TRON_SPINE_DIR", str(tmp_path / "spine"))
     import queue_server
     importlib.reload(queue_server)
     return TestClient(queue_server.app), queue_server

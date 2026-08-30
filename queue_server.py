@@ -31,6 +31,7 @@ import os
 import time
 import uuid
 import threading
+from pathlib import Path
 import asyncio
 from collections import defaultdict
 
@@ -58,6 +59,12 @@ from tron_runtime.global_brain import GlobalDecisionBrain
 # EXECUTION SPINE (Phase 1 + Phase 2)
 # =========================
 from tron.spine import EventLog, ArtifactStore, Task, content_hash, TopologyMap, match_jobs_to_workers
+
+# Phase 3 -> Phase 1 wiring: lets /training/run_demo record a real
+# training run into this server's own spine log, so /grid/ can render it.
+from tron.training.data import make_classification_dataset, make_non_iid_shards, train_test_split
+from tron.training.model import TinyMLP
+from tron.training.spine_integration import run_local_sgd_with_spine
 
 # =========================
 # ORCHESTRATOR & GPU IMPORTS
@@ -121,8 +128,17 @@ load_shaper = LoadShaper()
 
 # Execution spine: one process-wide event log, artifact store, and
 # topology map (measured worker latency, feeding placement decisions).
-event_log = EventLog()
-artifact_store = ArtifactStore()
+# TRON_SPINE_DIR lets tests (and operators who want spine data somewhere
+# other than the cwd) point this at an isolated directory — without it,
+# reloading this module (as the test suite's importlib.reload does to
+# reset in-memory state between tests) does NOT reset the on-disk event
+# log or artifact store, since EventLog/ArtifactStore open and continue
+# an existing file rather than truncate it. That's correct behavior for
+# a real server restart (the whole point of a durable log is surviving
+# one) — it's specifically a test-isolation footgun otherwise.
+_SPINE_DIR = Path(os.environ.get("TRON_SPINE_DIR", ".tron_spine"))
+event_log = EventLog(path=_SPINE_DIR / "log.db")
+artifact_store = ArtifactStore(root=_SPINE_DIR / "artifacts")
 topology = TopologyMap()
 
 global_brain = GlobalDecisionBrain(topology, swarm, load_shaper)
@@ -419,6 +435,62 @@ def spine_task(job_id: str):
             {"seq": e.seq, "type": e.type, "data": e.data, "timestamp": e.timestamp, "node_id": e.node_id}
             for e in events
         ],
+    }
+
+
+@app.post("/training/run_demo")
+def run_training_demo(payload: dict = None):
+    """Run the Phase 3 local-SGD demo, recording it into this server's
+    own execution spine (see tron/training/spine_integration.py) so
+    /grid/ can render a real training run instead of only generic job
+    lifecycle. Synchronous — the default size finishes in well under a
+    second (see tron/training/benchmark.py for the same problem run
+    standalone with the fuller comparison against a sync-every-step
+    baseline and weight merging).
+    """
+    payload = payload or {}
+    num_shards = int(payload.get("num_shards", 4))
+    num_rounds = int(payload.get("num_rounds", 10))
+    local_steps = int(payload.get("local_steps", 10))
+
+    num_features, num_classes = 8, 4
+    x_all, y_all = make_classification_dataset(
+        num_samples=2000, num_features=num_features, num_classes=num_classes, seed=0, class_sep=1.0,
+    )
+    x_train, y_train, x_test, y_test = train_test_split(x_all, y_all, test_fraction=0.2)
+    shards = make_non_iid_shards(x_train, y_train, num_shards=num_shards, num_classes=num_classes, skew=0.9, seed=1)
+
+    def factory():
+        return TinyMLP(input_dim=num_features, hidden_dim=16, num_classes=num_classes, seed=42)
+
+    with lock:
+        for i in range(num_shards):
+            name = f"shard-{i}"
+            if name not in workers:
+                workers[name] = {
+                    "name": name, "auth_token": None, "gpu": False, "gpu_name": None,
+                    "memory_gb": 4, "cuda_cores": 1024, "location": "in-process-training-demo",
+                    "load": 0, "status": "training", "last_heartbeat": time.time(),
+                }
+
+    result = run_local_sgd_with_spine(
+        shards, factory, num_rounds=num_rounds, local_steps=local_steps, lr=0.3,
+        event_log=event_log, artifact_store=artifact_store,
+    )
+
+    with lock:
+        for name in result["shard_node_ids"]:
+            if name in workers:
+                # Not "idle" — these are synthetic in-process shard nodes,
+                # not real pollable workers, so they shouldn't look like
+                # assignable capacity to the Phase 2b match step.
+                workers[name]["status"] = "done"
+
+    return {
+        "accuracy": result["model"].accuracy(x_test, y_test),
+        "comm_bytes": result["comm_bytes"],
+        "num_syncs": result["num_syncs"],
+        "shard_node_ids": result["shard_node_ids"],
     }
 
 # =========================

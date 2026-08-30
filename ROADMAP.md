@@ -93,10 +93,40 @@ technical design behind each phase.
         inputs; drag a worker and watch the scheduler react). Deliberately
         deferred until the passive replay is solid — see ARCHITECTURE.md's
         "why 3D observation, not 3D authoring."
-  - [ ] Not yet done: rendering an actual Phase 3 training run live (today
-        it renders `queue_server.py`'s generic job lifecycle, which the
-        training demo doesn't currently emit into — the training demo and
-        the spine log aren't wired together yet).
+- [x] **Phase 3 -> Phase 1 wiring.** `tron/training/spine_integration.py`:
+      `run_local_sgd_with_spine` records each shard's per-round training
+      as a real Task in the spine log (queued -> assigned -> started ->
+      completed, output = the shard's actual weight vector as a
+      content-addressed Artifact), reusing local_sgd.py's exact private
+      helpers rather than reimplementing the algorithm — a parity test
+      proves the instrumented and uninstrumented runs produce
+      bit-for-bit identical final models. `POST /training/run_demo`
+      triggers this against `queue_server.py`'s own spine, registering
+      synthetic `shard-N` workers. Verified live: triggered a 4-shard,
+      6-round run against a running server (85.75% accuracy — consistent
+      with the standalone benchmark), then confirmed in the Grid that
+      all 96 events (4 shards x 6 rounds x 4 lifecycle events) rendered
+      correctly with all 24 tasks completed and correctly attributed to
+      their shard.
+  - Caught and fixed during that verification: task identity was
+    `(fn_hash, input_hashes, attempt)` with the same inputs for every
+    shard in a round, so all shards in a round collapsed onto the same
+    task id (a test — not a visual check — caught this: task count came
+    back as 4 instead of 8 for a 4-round, 2-shard run). Fixed by hashing
+    each shard's actual data into its task's input_hashes, which is also
+    the more correct semantics (different data is a different input).
+  - Also caught and fixed: `hashAngle()` (the Grid's stable-layout hash)
+    used a plain polynomial hash, which barely disperses sequential
+    names like `shard-0`..`shard-3` (89°/90°/91°/92° — stacked almost on
+    top of each other). Replaced with FNV-1a plus a murmur3-style
+    finalizer for real avalanche behavior; confirmed the 4 shard nodes
+    now spread clearly around the master in a live screenshot.
+  - Also caught and fixed: `queue_server.py`'s `event_log`/`artifact_store`
+    defaulted to a fixed on-disk path, so test suites that reload the
+    module (to reset in-memory state) were silently accumulating state
+    across test runs in the same file — invisible until a test asserted
+    on the *total* log contents instead of filtering by a known id. Fixed
+    with a `TRON_SPINE_DIR` env var tests now set to an isolated temp dir.
 
 ## Known follow-ups (not blocking, tracked here so they aren't lost)
 

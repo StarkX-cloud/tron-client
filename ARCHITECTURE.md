@@ -93,6 +93,13 @@ anyone would call "real," is substantial, distinct future work. See
 ROADMAP.md for what's left, including the public writeup this phase was
 originally scoped to produce.
 
+`tron/training/spine_integration.py` wires this into Phase 1: each
+shard's per-round training is recorded as a real Task in the spine log,
+with a parity test proving instrumentation doesn't change the final
+model (bit-for-bit identical to the uninstrumented run).
+`POST /training/run_demo` triggers it against `queue_server.py`'s own
+spine — verified live, including in the Grid (see Phase 4 below).
+
 **Phase 4 — The 3D Grid (v1: passive replay).** Built: `tron/grid/index.html`,
 served by `queue_server.py` at `/grid/`. It's a static page (three.js,
 vendored locally — not a CDN reference, so it works offline and isn't at

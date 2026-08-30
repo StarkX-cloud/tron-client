@@ -12,7 +12,8 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRON_SPINE_DIR", str(tmp_path / "spine"))
     import queue_server
     importlib.reload(queue_server)
     return TestClient(queue_server.app)
