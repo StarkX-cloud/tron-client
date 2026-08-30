@@ -3,14 +3,19 @@
 Phase 1 shipped this as a stub returning the job's priority unchanged.
 Phase 2 makes it real: score is the job's priority, adjusted by how
 expensive it measurably is, in network terms, to place this job on the
-worker being considered. See tron/spine/topology.py for how the latency
-numbers this reads are collected.
+worker being considered — a latency term (Phase 2a) and an
+input-transfer term over measured bandwidth (Phase 2c). See
+tron/spine/topology.py for how both numbers are collected, and
+tron/spine/matcher.py, which uses the identical formula so the periodic
+match step and this per-worker fallback never disagree about what a
+placement costs.
 """
 from __future__ import annotations
 
 from typing import Optional
 
 from tron.spine import TopologyMap
+from tron.spine.matcher import _transfer_penalty
 
 
 class GlobalDecisionBrain:
@@ -54,4 +59,18 @@ class GlobalDecisionBrain:
         # ROADMAP.md.
         compute_weight = float(job.get("compute_weight", job.get("memory_gb", 1)))
         penalty = (latency_ms / 100.0) * compute_weight
-        return {"score": base_score - penalty, "latency_ms": latency_ms}
+
+        # Phase 2c: shipping a heavy artifact to this worker costs measured
+        # transfer time. Same helper (and therefore the same formula) as
+        # the match step. Zero unless the job declares `transfer_bytes` and
+        # this link's bandwidth has actually been measured — so every
+        # pre-bandwidth score is unchanged. Like the latency penalty this
+        # is job-specific (scales with the job's own byte count), which is
+        # what lets it actually influence which job a worker is handed
+        # rather than just shifting every candidate equally.
+        transfer_penalty = _transfer_penalty(job, worker_name, self.topology, "master")
+
+        return {
+            "score": base_score - penalty - transfer_penalty,
+            "latency_ms": latency_ms,
+        }

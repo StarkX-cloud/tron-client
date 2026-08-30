@@ -296,13 +296,67 @@ def heartbeat(worker_name: str, request: Request, payload: dict = None):
             latency_ms = payload.get("latency_ms")
             if isinstance(latency_ms, (int, float)) and latency_ms >= 0:
                 worker["latency_ms"] = latency_ms
+            # Phase 2c: worker-measured throughput of an actual payload
+            # transfer to/from the master (see /probe/blob, /probe/sink and
+            # worker.py's bandwidth_probe). "down" is master->worker — the
+            # direction that matters for shipping a job's inputs out.
+            bw_down = payload.get("bandwidth_mbps_down")
+            bw_up = payload.get("bandwidth_mbps_up")
+            if isinstance(bw_down, (int, float)) and bw_down > 0:
+                worker["bandwidth_mbps_down"] = float(bw_down)
+            if isinstance(bw_up, (int, float)) and bw_up > 0:
+                worker["bandwidth_mbps_up"] = float(bw_up)
 
     if payload:
         latency_ms = payload.get("latency_ms")
         if isinstance(latency_ms, (int, float)) and latency_ms >= 0:
             topology.record_latency("master", worker_name, float(latency_ms))
+        bw_down = payload.get("bandwidth_mbps_down")
+        if isinstance(bw_down, (int, float)) and bw_down > 0:
+            topology.record_bandwidth("master", worker_name, float(bw_down))
 
     return {"alive": True, "worker_name": worker_name}
+
+
+# =========================
+# BANDWIDTH PROBE (Phase 2c)
+# =========================
+# A worker measures its real throughput to the master by transferring a
+# payload and dividing bytes by wall-clock seconds — no synthetic
+# "network_bandwidth_gbps: 1.0" constant like the old worker registration
+# carried. /probe/blob is the download leg, /probe/sink the upload leg.
+# The blob is random (incompressible) so any transport-level gzip can't
+# inflate the measured rate, and it's generated once and reused.
+
+PROBE_MAX_BYTES = 8 * 1024 * 1024
+_probe_blob_cache: dict[int, bytes] = {}
+
+
+def _probe_blob(n: int) -> bytes:
+    if n not in _probe_blob_cache:
+        _probe_blob_cache[n] = os.urandom(n)
+    return _probe_blob_cache[n]
+
+
+@app.get("/probe/blob")
+def probe_blob(bytes: int = 1024 * 1024):
+    """Return `bytes` bytes of incompressible data for a worker to time its
+    download of. Capped at PROBE_MAX_BYTES so this can't be used to make
+    the server allocate arbitrary memory."""
+    n = max(1, min(int(bytes), PROBE_MAX_BYTES))
+    body = _probe_blob(n)
+    if _USE_FASTAPI:
+        from fastapi.responses import Response
+        return Response(content=body, media_type="application/octet-stream")
+    return body
+
+
+@app.post("/probe/sink")
+async def probe_sink(request: Request):
+    """Swallow an uploaded payload and report how many bytes arrived, so
+    the worker can time its upload leg."""
+    raw = await request.body()
+    return {"received_bytes": len(raw)}
 
 
 @app.post("/heartbeat")
@@ -330,7 +384,12 @@ def submit(job: dict):
         "memory_gb": float(job.get("memory_gb", job.get("min_memory_gb", 1))),
         "submitted_at": time.time(),
         "function": job.get("function"),
-        "compute_weight": job.get("compute_weight", 1)
+        "compute_weight": job.get("compute_weight", 1),
+        # Phase 2c: bytes of input the master must ship to whichever worker
+        # takes this job. Feeds the bandwidth term in matcher.score_pair /
+        # global_brain.decide — 0 (the default) leaves placement exactly as
+        # it was before bandwidth scoring existed.
+        "transfer_bytes": float(job.get("transfer_bytes", 0) or 0),
     }
 
     if raw_job["function"] is None:

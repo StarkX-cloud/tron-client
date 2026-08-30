@@ -40,9 +40,36 @@ technical design behind each phase.
       end-to-end in `tests/test_queue_server_topology.py` proving the
       exact cross-worker case Phase 2a's per-worker scoring alone
       couldn't solve. New runtime dependency: `scipy`.
+- [x] **Phase 2c — Measured bandwidth, not just latency.** Phase 2a/2b
+      scored placement on one network signal (heartbeat RTT). A worker
+      now also measures real **throughput** to the master: `worker.py`'s
+      `bandwidth_probe()` downloads 1MB from `GET /probe/blob` (random,
+      so transport gzip can't inflate the rate) and uploads 256KB to
+      `POST /probe/sink`, dividing bytes by wall-clock seconds — a
+      genuine transfer measurement, replacing the hard-coded
+      `network_bandwidth_gbps: 1.0` the old registration reported.
+      Probed every 15th heartbeat (throughput drifts slower than
+      latency), reported alongside `latency_ms`.
+      `TopologyMap.record_bandwidth` / `.bandwidth()` store it with the
+      identical EWMA + age-out machinery as latency.
+      `matcher.score_pair` and `global_brain.decide` gain a transfer
+      term: `transfer_seconds * BANDWIDTH_PENALTY_WEIGHT`, where
+      `transfer_seconds = job.transfer_bytes * 8 / (mbps * 1e6)` — one
+      shared helper (`matcher._transfer_penalty`) so the periodic match
+      step and the per-worker `/next_job` fallback can never disagree
+      about what a placement costs. **The term is provably inert until
+      bandwidth is measured *and* the job declares `transfer_bytes`** —
+      every pre-2c placement decision (and its pinned test) is
+      byte-identical. New tests: 9 in `tests/test_topology.py`, 3 in
+      `tests/test_matcher.py` (heavy transfer steered to the fat pipe
+      where latency-only scoring couldn't tell the workers apart), 5
+      end-to-end in `tests/test_queue_server_topology.py`. 120 passing.
 - [ ] Either implement or delete `tron_runtime/load_shaper.py`'s
       `reshape()`, which today is a pass-through (`delay: 0` for every
       job) — same "no module ships as an empty interface" rule.
+      (Phase 2c makes a real implementation possible: measured uplink
+      bandwidth is exactly the number a congestion-aware release delay
+      needs.)
 - [x] **Phase 3 — Distributed training demo (small-scale, real).**
       `tron/training/`: a hand-written numpy MLP (backprop verified
       against numerical gradients, `tests/test_training_model.py`),
@@ -129,8 +156,9 @@ technical design behind each phase.
       tails new events. three.js is vendored locally
       (`tron/grid/three.min.js`, `OrbitControls.js`) rather than loaded
       from a CDN, so the page works offline.
-  - [ ] Not yet done: pipe width from bandwidth (no bandwidth prober
-        exists yet — only latency is measured; see the note under Phase 2b).
+  - [ ] Not yet done: pipe width from bandwidth. The bandwidth prober now
+        exists (Phase 2c) and `/workers` exposes `bandwidth_mbps_down` per
+        worker — the Grid just doesn't render it as pipe thickness yet.
   - [ ] Not yet done: smooth motion between states (currently discrete
         per scrub step).
   - [ ] Not yet done: interaction (click a task to inspect its recorded

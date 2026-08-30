@@ -82,6 +82,63 @@ def test_optimal_assignment_beats_the_greedy_trap(topology):
     assert assignments["light"] == "far"
 
 
+def test_transfer_bytes_have_no_effect_without_measured_bandwidth(topology):
+    """The bandwidth term must be inert until bandwidth is actually
+    measured — otherwise adding it would silently re-rank every existing
+    (pre-Phase-2c) placement decision. A job can declare transfer_bytes;
+    with no bandwidth sample for the link the score is exactly what it was
+    before this term existed.
+    """
+    job_plain = {"id": "j", "priority": 5, "compute_weight": 2}
+    job_heavy_transfer = {**job_plain, "transfer_bytes": 500_000_000}
+    topology.record_latency("master", "worker-1", 40.0)
+
+    assert score_pair(job_plain, "worker-1", {}, topology) == score_pair(
+        job_heavy_transfer, "worker-1", {}, topology
+    )
+
+
+def test_bandwidth_steers_the_heavy_transfer_job_to_the_fat_pipe(topology):
+    """Latency alone can't separate these two workers — identical RTT. What
+    differs is throughput, and one job has to move 50MB of inputs while the
+    other moves 1MB. The optimal assignment sends the big transfer over the
+    100Mbps link and the small one over the 10Mbps link; a latency-only
+    scorer (Phase 2a/2b) would have no basis to prefer that pairing.
+    """
+    topology.record_latency("master", "fat", 10.0)
+    topology.record_latency("master", "thin", 10.0)
+    topology.record_bandwidth("master", "fat", 100.0)
+    topology.record_bandwidth("master", "thin", 10.0)
+
+    jobs = [
+        {"id": "big", "priority": 5, "compute_weight": 1, "transfer_bytes": 50_000_000},
+        {"id": "small", "priority": 5, "compute_weight": 1, "transfer_bytes": 1_000_000},
+    ]
+    workers = {"fat": {}, "thin": {}}
+
+    assignments = dict(match_jobs_to_workers(jobs, workers, topology))
+    assert assignments["big"] == "fat"
+    assert assignments["small"] == "thin"
+
+
+def test_bandwidth_penalty_can_override_a_small_priority_edge(topology):
+    """A slightly higher-priority job still yields the fat pipe to a much
+    heavier transfer when the thin link would make that transfer dominate
+    the cost."""
+    topology.record_bandwidth("master", "fat", 80.0)
+    topology.record_bandwidth("master", "thin", 4.0)
+
+    jobs = [
+        {"id": "tiny-urgent", "priority": 6, "compute_weight": 1, "transfer_bytes": 200_000},
+        {"id": "bulk", "priority": 5, "compute_weight": 1, "transfer_bytes": 40_000_000},
+    ]
+    workers = {"fat": {}, "thin": {}}
+
+    assignments = dict(match_jobs_to_workers(jobs, workers, topology))
+    assert assignments["bulk"] == "fat"
+    assert assignments["tiny-urgent"] == "thin"
+
+
 def test_equal_latency_ties_broken_by_priority(topology):
     topology.record_latency("master", "worker-a", 10.0)
     topology.record_latency("master", "worker-b", 10.0)

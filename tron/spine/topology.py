@@ -1,11 +1,19 @@
 """Topology awareness for placement decisions.
 
 Phase 2's actual claim is "place work by measured network cost, not by
-pretending every node is equidistant." v1 measures one real signal:
-round-trip latency between the master and each worker, self-reported by
-the worker (it times its own heartbeat request — that captures genuine
-network RTT plus server processing time, which is the number that matters
-for "is this worker cheap or expensive to hand work to").
+pretending every node is equidistant." It measures two real signals, both
+self-reported by the worker:
+
+- **Latency** — round-trip time of the worker's own heartbeat request
+  (genuine network RTT plus server processing time). This is what matters
+  for "is this worker cheap or expensive to hand a small unit of work to."
+- **Bandwidth** — throughput in Mbps, measured by the worker actually
+  transferring a payload to and from the master (`/probe/blob`,
+  `/probe/sink` in queue_server.py) and dividing bytes by seconds. This is
+  what matters for "how expensive is it to ship this job's *inputs* to
+  that worker" — a heavy artifact over a thin pipe is a real cost that
+  latency alone doesn't capture. `matcher.py` / `global_brain.py` fold
+  both into one placement score.
 
 This is deliberately a star-topology model: workers talk to the master,
 not to each other, which is the actual shape of the current cluster. A
@@ -13,8 +21,10 @@ peer-to-peer mesh (for e.g. moving artifacts worker-to-worker instead of
 through the master) is future work once workers can reach one another
 directly — see ROADMAP.md.
 
-Pure logic, no I/O — same design as model.py, so it's cheap to test and
-easy to reuse from a future bandwidth prober without rewriting this.
+Pure logic, no I/O — same design as model.py, so it's cheap to test.
+Bandwidth is stored with the exact same EWMA-plus-age-out machinery as
+latency, because a stale throughput number is just as misleading as a
+stale RTT one.
 """
 from __future__ import annotations
 
@@ -39,6 +49,8 @@ class TopologyMap:
         self._lock = threading.Lock()
         self._latency_ms: dict[tuple[str, str], float] = {}
         self._last_seen: dict[tuple[str, str], float] = {}
+        self._bandwidth_mbps: dict[tuple[str, str], float] = {}
+        self._bw_last_seen: dict[tuple[str, str], float] = {}
 
     @staticmethod
     def _key(from_node: str, to_node: str) -> tuple[str, str]:
@@ -68,6 +80,42 @@ class TopologyMap:
         with self._lock:
             value = self._latency_ms.get(key)
             last_seen = self._last_seen.get(key)
+        if value is None or last_seen is None:
+            return None
+        current_time = now if now is not None else time.time()
+        if current_time - last_seen > self._max_age:
+            return None
+        return value
+
+    def record_bandwidth(
+        self,
+        from_node: str,
+        to_node: str,
+        mbps: float,
+        timestamp: Optional[float] = None,
+    ) -> None:
+        """Record a measured throughput sample (megabits/sec) for the link
+        from `from_node` to `to_node`. Smoothed with the same EWMA weight
+        as latency. Zero is rejected alongside negatives: a real transfer
+        that completed took some non-zero time, so 0 Mbps is a
+        measurement bug, not a slow link."""
+        if mbps <= 0:
+            raise ValueError("mbps must be positive")
+        ts = timestamp if timestamp is not None else time.time()
+        key = self._key(from_node, to_node)
+        with self._lock:
+            previous = self._bandwidth_mbps.get(key)
+            smoothed = mbps if previous is None else previous + self._smoothing * (mbps - previous)
+            self._bandwidth_mbps[key] = smoothed
+            self._bw_last_seen[key] = ts
+
+    def bandwidth(self, from_node: str, to_node: str, now: Optional[float] = None) -> Optional[float]:
+        """Smoothed throughput estimate in Mbps, or None if never measured
+        or the measurement has aged out — same contract as `latency()`."""
+        key = self._key(from_node, to_node)
+        with self._lock:
+            value = self._bandwidth_mbps.get(key)
+            last_seen = self._bw_last_seen.get(key)
         if value is None or last_seen is None:
             return None
         current_time = now if now is not None else time.time()
