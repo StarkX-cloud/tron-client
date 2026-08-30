@@ -162,12 +162,33 @@ technical design behind each phase.
       - New optional dependency group: `requirements-training.txt`
         (torch, transformers, peft, accelerate, safetensors) — not
         required for `queue_server.py` or the core test suite.
-  - [ ] Not yet done: still one machine, in-process — the "genuinely
-        separate physical machines" gap above applies here too.
-  - [ ] Not yet done: LoRA adapters aren't wired into the spine
-        (`tron/training/spine_integration.py` only covers the numpy
-        demo) — the Grid can't yet render a LoRA run the way it renders
-        the numpy one.
+  - [x] **LoRA adapters wired into the spine.** `tron/training/lora_spine.py`:
+        `run_local_sgd_lora_with_spine` is the adapter counterpart of
+        `spine_integration.run_local_sgd_with_spine`. It reuses
+        `lora_demo.py`'s own helpers (`make_lora_model`, `train_steps`,
+        `average_adapter_states`, ...) in the identical order, adding
+        recording as pure side effect — each shard's per-round adapter
+        training is one Task (queued -> assigned -> started -> completed),
+        with that shard's LoRA state dict stored as the completed event's
+        output Artifact (`transfer_bytes` = adapter size, task metadata
+        carries the ~280MB full-model size alongside for contrast). So the
+        Grid renders a LoRA run with the same event vocabulary as
+        everything else. `tests/test_lora_spine.py` (6 tests, tiny
+        stand-in model — no Pythia download) asserts the instrumented run
+        matches `lora_demo.run_local_sgd_lora` **tensor-for-tensor**.
+        `python -m tron.training.benchmark_lora --spine-dir DIR` runs the
+        real Pythia-70M local-SGD portion through this path so an actual
+        LoRA run is Grid-replayable (`TRON_SPINE_DIR=DIR python
+        queue_server.py`).
+  - [ ] Not yet done: LoRA over the real wire. The numpy MLP runs across
+        separate processes (`tron/training/distributed/`); the LoRA path
+        records into the spine but still trains in one process. Wiring
+        LoRA adapters through `tron/training/distributed/`'s transport —
+        adapter state dicts as the POST body instead of numpy vectors —
+        is the remaining "real model over a real network" combination.
+        `lora_spine.encode_adapter_state` / `decode_adapter_state` are
+        the serialization half of it; `param_server.TrainingSession`
+        would need an adapter-aware `model_kind`.
 - [x] **Phase 4 v1 — The 3D Grid: passive replay.** `tron/grid/index.html`,
       served at `/grid/` by `queue_server.py`. Worker distance from the
       master = real measured heartbeat latency (the same number

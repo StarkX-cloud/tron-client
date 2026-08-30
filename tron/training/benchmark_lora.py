@@ -1,6 +1,7 @@
 """Run this to reproduce the Phase 3 scale-up benchmark:
 
     python -m tron.training.benchmark_lora
+    python -m tron.training.benchmark_lora --spine-dir .tron_spine_lora
 
 Same comparison as benchmark.py (local SGD vs. a sync-every-step-shaped
 baseline, plus zero-communication weight merging), applied to a real
@@ -8,8 +9,18 @@ small open-weight model (EleutherAI's Pythia-70M) via LoRA on the
 tiny-shakespeare corpus, instead of a hand-rolled numpy MLP on synthetic
 data. See tron/training/lora_demo.py for the mechanism and
 ARCHITECTURE.md for what this does and doesn't claim.
+
+With `--spine-dir DIR`, the local-SGD portion is run through
+`tron.training.lora_spine.run_local_sgd_lora_with_spine`, which records
+every shard's per-round adapter training into a real event log +
+artifact store under DIR. Point a server at it
+(`TRON_SPINE_DIR=DIR python queue_server.py`) and the Grid replays the
+LoRA run the same way it replays the numpy demo — each adapter is a
+retrievable content-addressed Artifact, ~KB, not the ~280MB full model.
 """
 from __future__ import annotations
+
+import argparse
 
 import torch
 
@@ -30,7 +41,7 @@ LOCAL_STEPS = 5
 LR = 5e-4
 
 
-def run() -> dict:
+def run(spine_dir: str | None = None) -> dict:
     base_model, tokenizer = load_base_model_and_tokenizer()
     token_ids = load_corpus_token_ids(tokenizer)
 
@@ -43,10 +54,37 @@ def run() -> dict:
     shards = make_shards(train_ids, num_shards=NUM_SHARDS)
     held_out_blocks = make_shards(held_out_ids, num_shards=1)[0]
 
-    local_sgd_result = run_local_sgd_lora(
-        base_model, shards, held_out_blocks,
-        num_rounds=NUM_ROUNDS, local_steps=LOCAL_STEPS, lr=LR,
-    )
+    if spine_dir:
+        from pathlib import Path
+
+        from tron.spine import ArtifactStore, EventLog
+        from .lora_spine import run_local_sgd_lora_with_spine
+
+        root = Path(spine_dir)
+        log = EventLog(path=root / "log.db")
+        store = ArtifactStore(root=root / "artifacts")
+        spined = run_local_sgd_lora_with_spine(
+            base_model, shards, held_out_blocks,
+            num_rounds=NUM_ROUNDS, local_steps=LOCAL_STEPS, lr=LR,
+            event_log=log, artifact_store=store,
+        )
+        print(f"[benchmark_lora] recorded {NUM_SHARDS * NUM_ROUNDS} adapter "
+              f"training tasks into the spine at {root}")
+
+        class _Result:  # shape-compatible with LoraRunResult for the report below
+            eval_loss_before = spined["eval_loss_before"]
+            eval_loss_after = spined["eval_loss_after"]
+            comm_bytes = spined["comm_bytes"]
+            num_syncs = spined["num_syncs"]
+            wall_clock_seconds = 0.0
+            final_model = spined["final_model"]
+
+        local_sgd_result = _Result()
+    else:
+        local_sgd_result = run_local_sgd_lora(
+            base_model, shards, held_out_blocks,
+            num_rounds=NUM_ROUNDS, local_steps=LOCAL_STEPS, lr=LR,
+        )
 
     merge_result = run_independent_lora_and_merge(
         base_model, shards, held_out_blocks,
@@ -100,4 +138,11 @@ def _print_report(r: dict) -> None:
 
 
 if __name__ == "__main__":
-    _print_report(run())
+    parser = argparse.ArgumentParser(description="TRON Phase 3 scale-up (LoRA) benchmark")
+    parser.add_argument(
+        "--spine-dir", default=None,
+        help="record the local-SGD run's per-shard adapter training into an "
+             "event log + artifact store under this directory, for Grid replay",
+    )
+    args = parser.parse_args()
+    _print_report(run(spine_dir=args.spine_dir))
