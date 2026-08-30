@@ -108,6 +108,33 @@ def test_match_cycle_is_a_noop_with_no_idle_workers(client):
     assert qs.pending_assignment == {}
 
 
+def test_match_cycle_ignores_idle_workers_with_stale_heartbeats(client):
+    """Real bug, found running this against genuinely separate machines
+    over a real network, not caught by any localhost test: a worker that
+    registered once and then stopped heartbeating (dead process, lost
+    connection) keeps status "idle" forever — only the watchdog clears
+    staleness, and it only looks at *busy* workers. Worse, that
+    stale-but-"idle" worker was actually *favored*: no measured latency
+    costs zero penalty, so it out-scored a real, live worker with real
+    (nonzero) latency. The job got assigned to a worker that would never
+    poll for it again and sat there silently forever.
+    """
+    tc, qs = client
+    _register(tc, "stale-worker")
+    _register(tc, "live-worker")
+
+    tc.post("/heartbeat/live-worker", json={"worker_name": "live-worker", "latency_ms": 50.0})
+    # stale-worker registered but never heartbeated again — its
+    # last_heartbeat is from registration, already "long enough ago" for
+    # this test's purposes.
+    qs.workers["stale-worker"]["last_heartbeat"] -= (qs.HEARTBEAT_TIMEOUT_SECONDS + 5)
+
+    tc.post("/submit", json={"function": "fn", "priority": 5})
+    qs._run_match_cycle()
+
+    assert set(qs.pending_assignment.keys()) == {"live-worker"}
+
+
 def test_spine_events_recorded_for_submitted_job(client):
     tc, qs = client
     submit_resp = tc.post("/submit", json={"function": "dummy-fn-payload"})

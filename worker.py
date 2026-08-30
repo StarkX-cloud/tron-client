@@ -1,3 +1,4 @@
+import hashlib
 import os
 import time
 import uuid
@@ -19,7 +20,16 @@ except ImportError:
 
 TRON_MASTER_URL = os.environ.get("TRON_MASTER_URL", "http://127.0.0.1:9000")
 WORKER_NAME = os.environ.get("TRON_WORKER_NAME", f"worker-{uuid.uuid4().hex[:8]}")
-AUTH_TOKEN_FILE = Path(os.environ.get("TRON_AUTH_TOKEN_FILE", Path.home() / ".tron_worker_auth.json"))
+
+# The cache file is scoped to (master URL, worker name) — a real bug hit
+# during development, not a defensive guess: with a single fixed cache
+# path, pointing this same worker at a *different* server reused a token
+# issued by (and only meaningful to) the old one. The server didn't
+# recognize it, so /heartbeat and /next_job silently failed forever
+# (both swallow request errors) while the process kept "running" and
+# printing nothing — it looked alive but had never actually registered.
+_default_auth_token_file = Path.home() / f".tron_worker_auth_{hashlib.sha256((TRON_MASTER_URL + WORKER_NAME).encode()).hexdigest()[:16]}.json"
+AUTH_TOKEN_FILE = Path(os.environ.get("TRON_AUTH_TOKEN_FILE", _default_auth_token_file))
 LOCATION = os.environ.get("TRON_LOCATION", "self-hosted")
 
 # GPU cluster instance for this worker
@@ -74,7 +84,14 @@ def detect_gpu():
 def load_auth_token():
     if AUTH_TOKEN_FILE.exists():
         try:
-            return json.loads(AUTH_TOKEN_FILE.read_text()).get("auth_token")
+            cached = json.loads(AUTH_TOKEN_FILE.read_text())
+            # Defense in depth on top of the per-(master, name) cache path
+            # above: never trust a cached token whose worker_name doesn't
+            # match the one we're running as right now (e.g. if
+            # TRON_AUTH_TOKEN_FILE was set manually).
+            if cached.get("worker_name") != WORKER_NAME:
+                return None
+            return cached.get("auth_token")
         except Exception:
             return None
     return None

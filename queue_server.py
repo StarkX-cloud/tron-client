@@ -664,13 +664,31 @@ def complete_job(payload: dict):
 def _run_match_cycle():
     """One pass of the match step — separated from _match_loop's sleep
     loop so it can be invoked directly (tests) as well as periodically
-    (the real server)."""
+    (the real server).
+
+    Real bug found running this against genuinely separate machines over
+    a real network, not caught by any localhost test: a worker that
+    registered once and then never heartbeated again (dead process, lost
+    connection — exactly what happens on a real unreliable network) keeps
+    status "idle" forever, since only the watchdog clears staleness and
+    it only ever looks at *busy* workers. That stale-but-"idle" worker
+    was then not just eligible for matching but *favored* — it has no
+    measured latency, and unmeasured latency costs zero penalty in
+    GlobalDecisionBrain.decide, so it out-scored a real, responsive
+    worker with real (nonzero) measured latency. A job got assigned to a
+    worker that would never poll for it again, and sat there
+    indefinitely — silent, no error, nothing in any log to point at it.
+    Filtering to workers with a recent heartbeat closes this.
+    """
     with lock:
         if not job_queue:
             return
+        now = time.time()
         idle_workers = {
             name: w for name, w in workers.items()
-            if w.get("status") == "idle" and name not in pending_assignment
+            if w.get("status") == "idle"
+            and name not in pending_assignment
+            and (now - w.get("last_heartbeat", 0)) <= HEARTBEAT_TIMEOUT_SECONDS
         }
         if not idle_workers:
             return
