@@ -64,12 +64,23 @@ technical design behind each phase.
       `tests/test_matcher.py` (heavy transfer steered to the fat pipe
       where latency-only scoring couldn't tell the workers apart), 5
       end-to-end in `tests/test_queue_server_topology.py`. 120 passing.
-- [ ] Either implement or delete `tron_runtime/load_shaper.py`'s
-      `reshape()`, which today is a pass-through (`delay: 0` for every
-      job) — same "no module ships as an empty interface" rule.
-      (Phase 2c makes a real implementation possible: measured uplink
-      bandwidth is exactly the number a congestion-aware release delay
-      needs.)
+- [x] **`tron_runtime/load_shaper.py` is real now** (was a `delay: 0`
+      pass-through — the "implement it or delete it" rule). Backed by
+      Phase 2c's measured bandwidth: a worker whose downlink is `B` Mbps
+      absorbs ~`B * 1e6 / 8 * window_seconds` bytes of job input before
+      further transfers queue on the wire. `LoadShaper` tracks bytes
+      dispatched to each worker over a sliding window (a *link cooldown*
+      that ages out on its own, not tied to job completion — a slow-pipe
+      worker that just took a big transfer is still recovering even after
+      it reports the job done) and won't pile a new transfer onto a
+      worker already at budget. `_run_match_cycle` consults
+      `can_accept()` before committing a pairing; `/next_job` runs the
+      queue through `reshape()`. Inert by construction: unmeasured
+      bandwidth = unlimited, no `transfer_bytes` = never held, an idle
+      link accepts any single job (even one bigger than a window, else it
+      could never schedule). `shape()` — genuinely unused — was deleted.
+      12 unit tests in `tests/test_load_shaper.py`, 2 end-to-end in
+      `tests/test_queue_server_topology.py`.
 - [x] **Phase 3 — Distributed training demo (small-scale, real).**
       `tron/training/`: a hand-written numpy MLP (backprop verified
       against numerical gradients, `tests/test_training_model.py`),
