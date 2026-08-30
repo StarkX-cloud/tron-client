@@ -21,6 +21,19 @@
   #legend { position: absolute; bottom: 10px; right: 14px; z-index: 10; color: #a9c3d9; font-size: 12px; text-align: right; line-height: 1.6; }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
   #error { position: absolute; top: 60px; left: 14px; z-index: 10; color: #ff8080; font-size: 12px; white-space: pre-wrap; max-width: 60%; }
+  #inspector {
+    position: absolute; top: 56px; right: 14px; z-index: 10; width: 320px; max-height: 70vh; overflow-y: auto;
+    background: rgba(9,13,19,0.94); border: 1px solid #2a3644; border-radius: 6px;
+    color: #cfe8ff; font-size: 12px; padding: 10px 12px; display: none;
+  }
+  #inspector h3 { margin: 0 0 6px; font-size: 12px; color: #7fd0ff; font-weight: 600; }
+  #inspector .row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; border-bottom: 1px solid #182531; }
+  #inspector .row span:first-child { color: #7f97ab; }
+  #inspector .row span:last-child { color: #cfe8ff; text-align: right; word-break: break-all; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  #inspector .evlog { margin-top: 8px; font-family: ui-monospace, Menlo, Consolas, monospace; color: #9fb6c9; line-height: 1.5; }
+  #inspector .close { float: right; cursor: pointer; color: #7f97ab; }
+  #inspector .close:hover { color: #cfe8ff; }
+  #hint { position: absolute; top: 40px; left: 14px; z-index: 10; color: #5f7488; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -33,13 +46,16 @@
   <button id="live-btn">Live</button>
 </div>
 <div id="status">not connected</div>
+<div id="hint">click a task to inspect it &nbsp;·&nbsp; shift-drag a worker to ask "what would the scheduler do?"</div>
 <div id="error"></div>
+<div id="inspector"></div>
 <div id="legend">
   queued <span class="dot" style="background:#7d8b99"></span><br>
   running <span class="dot" style="background:#e8b23a"></span><br>
   completed <span class="dot" style="background:#3ad67a"></span><br>
   failed <span class="dot" style="background:#e8453a"></span><br>
-  requeued <span class="dot" style="background:#e87a3a"></span>
+  requeued <span class="dot" style="background:#e87a3a"></span><br>
+  <span style="color:#6f8ba3">link thickness = measured bandwidth</span>
 </div>
 
 <!-- Vendored locally (not a CDN reference) so this page works fully
@@ -85,7 +101,10 @@ function foldTasks(events, uptoIndex) {
     let task = tasks.get(e.task_id);
     if (e.type === "queued") {
       if (!task) {
-        task = { taskId: e.task_id, status: "queued", nodeId: null, fnHash: e.data.fn_hash, lastEventAt: e.timestamp };
+        task = {
+          taskId: e.task_id, status: "queued", nodeId: null,
+          fnHash: e.data.fn_hash, metadata: e.data.metadata || {}, lastEventAt: e.timestamp,
+        };
         tasks.set(e.task_id, task);
       }
       task.status = "queued";
@@ -144,10 +163,26 @@ const BASE_RADIUS = 6;
 const LATENCY_RADIUS_SCALE = 0.15;   // ms -> world units
 const UNMEASURED_RADIUS = BASE_RADIUS + 8; // unmeasured workers sit mid-out, not assumed-close
 
+function latencyToRadius(latency) {
+  return latency === null ? UNMEASURED_RADIUS : BASE_RADIUS + latency * LATENCY_RADIUS_SCALE;
+}
+function radiusToLatency(radius) {
+  // inverse of latencyToRadius, for turning a drag distance back into a
+  // hypothetical latency to ask /scheduler/whatif about
+  return Math.max(0, (radius - BASE_RADIUS) / LATENCY_RADIUS_SCALE);
+}
+
+// Link thickness = measured master->worker bandwidth (Phase 2c). Unmeasured
+// links are drawn hair-thin, not assumed fat — same rule as latency.
+function bandwidthRadius(mbps) {
+  if (typeof mbps !== "number" || mbps <= 0) return 0.03;
+  return 0.03 + Math.min(0.30, (mbps / 1000) * 0.30);
+}
+
 function workerPosition(name, info) {
   const angle = hashAngle(name);
   const latency = (info && typeof info.latency_ms === "number") ? info.latency_ms : null;
-  const radius = latency === null ? UNMEASURED_RADIUS : BASE_RADIUS + latency * LATENCY_RADIUS_SCALE;
+  const radius = latencyToRadius(latency);
   const load = (info && info.load) || 0;
   const height = Math.min(6, load * 0.8); // derived from reported load, not decorative
   return new THREE.Vector3(radius * Math.cos(angle), height, radius * Math.sin(angle));
@@ -196,8 +231,19 @@ masterMesh.position.copy(MASTER_POS);
 scene.add(masterMesh);
 
 const workerMeshes = new Map();   // name -> THREE.Mesh
-const workerLines = new Map();    // name -> THREE.Line (master -> worker)
+const workerPipes = new Map();    // name -> THREE.Mesh (master -> worker "pipe", radius = bandwidth)
 const taskMeshes = new Map();     // task_id -> THREE.Mesh
+
+const PIPE_GEOM = new THREE.CylinderGeometry(1, 1, 1, 8);
+const UP = new THREE.Vector3(0, 1, 0);
+
+function updatePipe(mesh, from, to, radius) {
+  const dir = new THREE.Vector3().subVectors(to, from);
+  const len = Math.max(0.0001, dir.length());
+  mesh.scale.set(radius, len, radius);
+  mesh.position.copy(from).addScaledVector(dir, 0.5);
+  mesh.quaternion.setFromUnitVectors(UP, dir.clone().normalize());
+}
 
 function ensureWorkerVisual(name, info) {
   const pos = workerPosition(name, info);
@@ -207,43 +253,52 @@ function ensureWorkerVisual(name, info) {
       new THREE.SphereGeometry(0.55, 20, 20),
       new THREE.MeshStandardMaterial({ color: 0x3a6ea8, roughness: 0.5 })
     );
+    mesh.userData.workerName = name;
     scene.add(mesh);
     workerMeshes.set(name, mesh);
 
-    const lineGeom = new THREE.BufferGeometry().setFromPoints([MASTER_POS, pos]);
-    const line = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({ color: 0x22384a, transparent: true, opacity: 0.6 }));
-    scene.add(line);
-    workerLines.set(name, line);
+    const pipe = new THREE.Mesh(
+      PIPE_GEOM,
+      new THREE.MeshStandardMaterial({ color: 0x2e5a74, transparent: true, opacity: 0.55, roughness: 0.8 })
+    );
+    scene.add(pipe);
+    workerPipes.set(name, pipe);
   }
   mesh.position.copy(pos);
+  mesh.userData.info = info;
   mesh.material.color.set((info && info.status === "offline") ? 0x552222 : 0x3a6ea8);
-  const line = workerLines.get(name);
-  line.geometry.setFromPoints([MASTER_POS, pos]);
+  const bw = info && (typeof info.bandwidth_mbps_down === "number" ? info.bandwidth_mbps_down : null);
+  updatePipe(workerPipes.get(name), MASTER_POS, pos, bandwidthRadius(bw));
   return pos;
+}
+
+function taskTargetPosition(task) {
+  const jitter = hashAngle(task.taskId);
+  if (task.nodeId && workerMeshes.has(task.nodeId)) {
+    // sit just off the worker, not exactly inside it, so many tasks on
+    // one worker are still individually visible
+    const base = workerMeshes.get(task.nodeId).position;
+    return new THREE.Vector3(base.x + Math.cos(jitter) * 0.9, base.y + 0.9, base.z + Math.sin(jitter) * 0.9);
+  }
+  return new THREE.Vector3(Math.cos(jitter) * 2.2, 0.6, Math.sin(jitter) * 2.2);
 }
 
 function ensureTaskVisual(task) {
   let mesh = taskMeshes.get(task.taskId);
+  const target = taskTargetPosition(task);
   if (!mesh) {
     mesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.22, 12, 12),
       new THREE.MeshStandardMaterial({ color: STATUS_COLOR[task.status] || 0xffffff, emissive: 0x111111 })
     );
+    mesh.position.copy(target);           // no tween-in from the origin on first appearance
     scene.add(mesh);
     taskMeshes.set(task.taskId, mesh);
   }
   mesh.material.color.set(STATUS_COLOR[task.status] || 0xffffff);
-
-  if (task.nodeId && workerMeshes.has(task.nodeId)) {
-    // sit just off the worker, not exactly inside it, so many tasks on
-    // one worker are still individually visible
-    const base = workerMeshes.get(task.nodeId).position;
-    const jitter = hashAngle(task.taskId);
-    mesh.position.set(base.x + Math.cos(jitter) * 0.9, base.y + 0.9, base.z + Math.sin(jitter) * 0.9);
-  } else {
-    const jitter = hashAngle(task.taskId);
-    mesh.position.set(Math.cos(jitter) * 2.2, 0.6, Math.sin(jitter) * 2.2);
-  }
+  mesh.userData.taskId = task.taskId;
+  mesh.userData.task = task;
+  mesh.userData.targetPos = target;       // render() eases position toward this
   mesh.visible = true;
   return mesh;
 }
@@ -251,6 +306,13 @@ function ensureTaskVisual(task) {
 function render() {
   requestAnimationFrame(render);
   controls.update();
+  // smooth motion: ease each visible task marker toward its target rather
+  // than snapping it there on every scrub step
+  for (const [, mesh] of taskMeshes) {
+    if (mesh.visible && mesh.userData.targetPos) {
+      mesh.position.lerp(mesh.userData.targetPos, 0.16);
+    }
+  }
   renderer.render(scene, camera);
 }
 render();
@@ -271,9 +333,148 @@ const els = {
   liveBtn: document.getElementById("live-btn"),
   status: document.getElementById("status"),
   error: document.getElementById("error"),
+  inspector: document.getElementById("inspector"),
 };
 
 function showError(msg) { els.error.textContent = msg || ""; }
+
+// -- interaction: click a task to inspect, shift-drag a worker to ask
+//    /scheduler/whatif "what would the scheduler do if this link changed?"
+//    (Phase 4 Grid v2. The passive replay came first on purpose — see
+//    ARCHITECTURE.md's "why 3D observation, not 3D authoring".)
+
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const whatifLines = [];
+let drag = null;   // { name, angle, y } while shift-dragging a worker
+
+function pointerNDC(ev) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  return ndc;
+}
+
+function pick(meshes, ev) {
+  raycaster.setFromCamera(pointerNDC(ev), camera);
+  const hits = raycaster.intersectObjects(meshes, false);
+  return hits.length ? hits[0].object : null;
+}
+
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+function closeInspector() { els.inspector.style.display = "none"; }
+
+function showTaskInspector(task) {
+  const events = state.events.filter(e => e.task_id === task.taskId);
+  const last = events[events.length - 1] || {};
+  const m = task.metadata || (events[0] && events[0].data && events[0].data.metadata) || {};
+  const rows = [
+    ["task", task.taskId.slice(0, 16) + "…"],
+    ["status", task.status],
+    ["node", task.nodeId || "—"],
+    ["attempt", (m.round !== undefined ? m.round : (last.data && last.data.attempt) || 0)],
+    ["fn hash", (task.fnHash || "").slice(0, 12) || "—"],
+    ["output", (last.data && last.data.output_hash || "").slice(0, 12) || "—"],
+  ];
+  if (m.kind) rows.push(["kind", m.kind]);
+  if (m.round !== undefined) rows.push(["round / shard", m.round + " / " + m.shard]);
+  if (last.data && last.data.transfer_bytes) rows.push(["transferred", (+last.data.transfer_bytes).toLocaleString() + " B"]);
+  if (m.adapter_bytes) rows.push(["adapter vs full", (+m.adapter_bytes).toLocaleString() + " / " + (+m.full_model_bytes).toLocaleString() + " B"]);
+
+  els.inspector.innerHTML =
+    '<span class="close">×</span><h3>task</h3>' +
+    rows.map(([k, v]) => `<div class="row"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join("") +
+    '<div class="evlog">' + events.map(e =>
+      `${e.seq}. ${esc(e.type)}${e.node_id ? " @" + esc(e.node_id) : ""}`).join("<br>") + "</div>";
+  els.inspector.querySelector(".close").addEventListener("click", closeInspector);
+  els.inspector.style.display = "block";
+}
+
+function clearWhatif() {
+  for (const l of whatifLines) { scene.remove(l); l.geometry.dispose(); l.material.dispose(); }
+  whatifLines.length = 0;
+}
+
+function showWhatif(result, draggedName, hypoLatencyMs) {
+  clearWhatif();
+  const hypo = new Map(result.hypothetical.map(([j, w]) => [j, w]));
+  const base = new Map(result.baseline.map(([j, w]) => [j, w]));
+  for (const [jobId, worker] of hypo) {
+    const wm = workerMeshes.get(worker);
+    if (!wm) continue;
+    const changed = base.get(jobId) !== worker;
+    const geom = new THREE.BufferGeometry().setFromPoints([MASTER_POS.clone(), wm.position.clone()]);
+    const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: changed ? 0x59f0c0 : 0x3b5566 }));
+    scene.add(line);
+    whatifLines.push(line);
+  }
+  const n = result.changed_jobs.length;
+  els.inspector.innerHTML =
+    '<span class="close">×</span><h3>what-if</h3>' +
+    `<div class="row"><span>dragged</span><span>${esc(draggedName)}</span></div>` +
+    `<div class="row"><span>hypothetical latency</span><span>${hypoLatencyMs.toFixed(0)} ms</span></div>` +
+    `<div class="row"><span>queued jobs</span><span>${result.queued_jobs.length}</span></div>` +
+    `<div class="row"><span>reassigned</span><span>${n} job${n === 1 ? "" : "s"}</span></div>` +
+    '<div class="evlog">' +
+      result.hypothetical.map(([j, w]) =>
+        `${j.slice(0, 8)} → ${esc(w)}${base.get(j) !== w ? "  (was " + esc(base.get(j) || "—") + ")" : ""}`
+      ).join("<br>") +
+    "</div>";
+  els.inspector.querySelector(".close").addEventListener("click", () => { closeInspector(); clearWhatif(); });
+  els.inspector.style.display = "block";
+}
+
+renderer.domElement.addEventListener("pointerdown", (ev) => {
+  if (ev.shiftKey) {
+    const wm = pick([...workerMeshes.values()], ev);
+    if (wm) {
+      drag = { name: wm.userData.workerName, angle: hashAngle(wm.userData.workerName), y: wm.position.y };
+      controls.enabled = false;
+      ev.preventDefault();
+    }
+  }
+});
+
+renderer.domElement.addEventListener("pointermove", (ev) => {
+  if (!drag) return;
+  raycaster.setFromCamera(pointerNDC(ev), camera);
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -drag.y);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(plane, hit)) return;
+  const radius = Math.min(60, Math.max(BASE_RADIUS + 0.5, Math.hypot(hit.x, hit.z)));
+  const wm = workerMeshes.get(drag.name);
+  wm.position.set(radius * Math.cos(drag.angle), drag.y, radius * Math.sin(drag.angle));
+  const bw = state.workers[drag.name] && state.workers[drag.name].bandwidth_mbps_down;
+  updatePipe(workerPipes.get(drag.name), MASTER_POS, wm.position, bandwidthRadius(typeof bw === "number" ? bw : null));
+  drag.lastRadius = radius;
+});
+
+renderer.domElement.addEventListener("pointerup", async () => {
+  if (!drag) return;
+  const { name, lastRadius } = drag;
+  drag = null;
+  controls.enabled = true;
+  if (lastRadius === undefined) return;
+  const hypoLatency = radiusToLatency(lastRadius);
+  try {
+    const res = await fetch(state.serverUrl + "/scheduler/whatif", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ overrides: { [name]: { latency_ms: hypoLatency } } }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    showWhatif(await res.json(), name, hypoLatency);
+  } catch (err) {
+    showError("what-if failed: " + err.message);
+  } finally {
+    ensureWorkerVisual(name, state.workers[name]); // snap the worker back — it was a hypothetical, not a move
+  }
+});
+
+renderer.domElement.addEventListener("click", (ev) => {
+  if (drag) return;
+  const tm = pick([...taskMeshes.values()].filter(m => m.visible), ev);
+  if (tm && tm.userData.task) showTaskInspector(tm.userData.task);
+});
 
 function applyScrub() {
   const tasks = foldTasks(state.events, state.scrubIndex);

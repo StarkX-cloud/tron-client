@@ -13,3 +13,4 @@ venv/
 *.sqlite3
 tron_*.db
 .tron_spine/
+.tron_spine*/

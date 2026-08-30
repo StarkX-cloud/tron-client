@@ -508,6 +508,62 @@ def spine_task(job_id: str):
     }
 
 
+@app.post("/scheduler/whatif")
+def scheduler_whatif(payload: dict = None):
+    """Phase 4 Grid v2: non-destructive "what would the scheduler do if
+    this worker's link were different?" Given per-worker latency/bandwidth
+    overrides, return the assignment the match step (tron/spine/matcher.py)
+    would produce right now, next to the one it produces with no
+    overrides. Touches no real state — builds throwaway TopologyMaps and
+    runs the matcher against copies of the current queue and idle workers.
+    Drag a worker in /grid/ and this is what it calls.
+    """
+    payload = payload or {}
+    overrides = payload.get("overrides", {}) or {}
+
+    with lock:
+        jobs = [dict(j) for j in job_queue]
+        now = time.time()
+        idle = {
+            name: dict(w) for name, w in workers.items()
+            if w.get("status") == "idle"
+            and (now - w.get("last_heartbeat", 0)) <= HEARTBEAT_TIMEOUT_SECONDS
+        }
+        measured = {
+            name: (topology.latency("master", name), topology.bandwidth("master", name))
+            for name in idle
+        }
+
+    def _assign(apply_overrides: bool):
+        snap = TopologyMap()
+        for name, (lat, bw) in measured.items():
+            o = overrides.get(name, {}) if apply_overrides else {}
+            lat = o.get("latency_ms", lat)
+            bw = o.get("bandwidth_mbps_down", bw)
+            if lat is not None:
+                snap.record_latency("master", name, float(lat))
+            if bw is not None and float(bw) > 0:
+                snap.record_bandwidth("master", name, float(bw))
+        return [[jid, w] for jid, w in match_jobs_to_workers(jobs, idle, snap)]
+
+    baseline = _assign(apply_overrides=False)
+    hypothetical = _assign(apply_overrides=True)
+    base_map = {jid: w for jid, w in baseline}
+    hypo_map = {jid: w for jid, w in hypothetical}
+    changed = sorted(
+        jid for jid in set(base_map) | set(hypo_map)
+        if base_map.get(jid) != hypo_map.get(jid)
+    )
+    return {
+        "queued_jobs": [j["id"] for j in jobs],
+        "idle_workers": sorted(idle),
+        "baseline": baseline,
+        "hypothetical": hypothetical,
+        "changed_jobs": changed,
+        "overrides": overrides,
+    }
+
+
 @app.post("/training/run_demo")
 def run_training_demo(payload: dict = None):
     """Run the Phase 3 local-SGD demo, recording it into this server's

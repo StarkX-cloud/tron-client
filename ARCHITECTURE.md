@@ -177,14 +177,26 @@ different reported latencies (8ms / 60ms / 260ms) — their rendered
 distances from the master matched the position formula exactly (7.2 /
 15.0 / 45.0 world units for `BASE_RADIUS=6 + latency_ms * 0.15`).
 
-**What v1 does not do**, deliberately deferred rather than faked:
-interaction (click a task to inspect its recorded inputs, drag a worker
-to see the scheduler react) — see the "why 3D observation, not 3D
-authoring" rationale below for why passive replay came first. Task
-motion between states is discrete per scrub step, not smoothly animated
-between positions. Worker layout uses only latency (one topology
-signal); bandwidth and pipe-width-from-throughput are not implemented —
-there's no bandwidth prober yet (see ROADMAP.md).
+**Grid v2** added interaction on top of the passive replay, once that was
+solid (the "why observation first" rationale below still holds — v2 is
+inspection and hypotheticals, not 3D authoring):
+
+- **Click a task** raycasts the marker and folds that task's events out
+  of the already-loaded log into an inspector panel (lineage, hashes,
+  and for training tasks the round·shard and adapter-vs-full byte ratio).
+- **Shift-drag a worker** maps its new distance back to a hypothetical
+  latency and calls `POST /scheduler/whatif`, which re-runs
+  `tron/spine/matcher.py` against a throwaway topology and *copies* of
+  the live queue and idle workers — no real state touched — and returns
+  the assignment it would produce vs. the baseline. Reassigned jobs are
+  drawn as bright links; the worker snaps back.
+- **Pipe width** on each master->worker link now comes from measured
+  bandwidth (Phase 2c); unmeasured links stay hair-thin.
+- **Task motion** eases toward its target each frame instead of snapping
+  per scrub step.
+
+All verified in a real browser against a live server, the same standard
+as v1.
 
 ## Why 3D observation, not 3D authoring
 
