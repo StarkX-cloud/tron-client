@@ -46,14 +46,26 @@ One mechanism, four consequences:
 watchdog in `queue_server.py` now recovers dead workers' in-flight tasks via
 `recover_orphaned_tasks` instead of trusting in-memory state alone.
 
-**Phase 2 — Heterogeneous fault-tolerant fabric.** Not started. Needs:
-a topology prober that measures real pairwise latency/bandwidth between
-registered nodes, and `GlobalDecisionBrain` (currently
-`tron_runtime/global_brain.py`, a stub) rewritten to place work by measured
-communication cost instead of returning `job["priority"]` unchanged. This
-is where `tron_runtime`'s other stub engines either get real implementations
-or get deleted — no module should ship as an empty interface pretending to
-be behavior.
+**Phase 2 — Heterogeneous fault-tolerant fabric.** Partially built.
+`tron/spine/topology.py`'s `TopologyMap` records real, worker-self-reported
+heartbeat round-trip latency (EWMA-smoothed, ages out on silence).
+`tron_runtime/global_brain.py` is no longer a stub — it scores placement
+from that measured latency. The other 11 stub modules that queue_server.py
+instantiated but never called (`market_engine.py`, `auto_scaler.py`,
+`predictor_engine.py`, etc.) have been deleted rather than filled in — they
+had no concrete role.
+
+What's *not* solved: `/next_job` is worker-pull (a worker asks for its best
+job; the master answers from that worker's queue view alone), so there is
+no point where two workers' scores for the same job are ever compared — a
+latency penalty that's constant across every job in one call cannot change
+which job wins argmax, full stop. The current mitigation scales the penalty
+by the job's `compute_weight` (a slow-link worker is steered toward light
+jobs, which is real and tested — see `tests/test_queue_server_topology.py`)
+but that is not the same as "the closest worker gets the job." Actually
+solving that needs a master-side match step run periodically over all idle
+workers and all queued jobs at once — an assignment problem, not N
+independent per-worker argmax calls. That's Phase 2b; see ROADMAP.md.
 
 **Phase 3 — Distributed training demo.** Not started. The actual
 "get noticed" artifact: DiLoCo-style local SGD (hundreds of local steps

@@ -6,14 +6,36 @@ technical design behind each phase.
 - [x] **Phase 1 — Execution spine.** Content-addressed artifacts +
       append-only replayable event log (`tron/spine/`). Wired into
       `queue_server.py`. 19 passing tests in `tests/test_spine.py`.
-- [ ] **Phase 2 — Heterogeneous fault-tolerant fabric.**
-  - [ ] Topology prober: measure real pairwise latency/bandwidth between
-        registered workers.
-  - [ ] Replace `tron_runtime/global_brain.py`'s stub scoring with
-        placement decisions driven by measured topology.
-  - [ ] Either implement or delete each remaining stub in `tron_runtime/`
-        (`auto_scaler.py`, `market_engine.py`, `predictor_engine.py`,
-        etc.) — no module ships as an empty interface long-term.
+- [x] **Phase 2a — Latency-aware placement (partial).**
+  - [x] `tron/spine/topology.py`: `TopologyMap` records real, worker-
+        self-reported heartbeat round-trip latency (EWMA-smoothed, ages
+        out if the worker stops reporting).
+  - [x] `tron_runtime/global_brain.py` rewritten from a stub into real
+        scoring driven by measured latency.
+  - [x] Deleted the 11 other `tron_runtime`/root stub modules that were
+        instantiated but never called by anything — decoration, not
+        behavior.
+  - **Real architectural limit found while wiring this up, not yet
+    solved:** `/next_job` is worker-*pull* — a worker asks "give me my
+    best job" and the master answers from that worker's own queue view in
+    isolation. There is no point where two different workers' scores for
+    the *same* job are ever compared, so a naive per-worker latency
+    penalty (constant across every job in one call) provably cannot
+    change which job gets picked — it shifts every candidate's score
+    equally, which leaves argmax untouched. Current fix: the penalty
+    scales with the job's `compute_weight`, so a slow-link worker is
+    steered toward light jobs and away from heavy ones — a real,
+    testable effect (see `tests/test_queue_server_topology.py`), but it
+    is *not* the same thing as "the closest worker gets the job."
+- [ ] **Phase 2b — Cross-worker arbitration.** The actual fix for the
+      limit above: replace (or supplement) worker-pull with a periodic
+      master-side match step that considers all idle workers against all
+      queued jobs at once — an assignment problem, not N independent
+      per-worker argmax calls. This is the real "placement" Phase 2 was
+      meant to deliver; 2a is a partial, honestly-scoped step toward it.
+- [ ] Either implement or delete `tron_runtime/load_shaper.py`'s
+      `reshape()`, which today is a pass-through (`delay: 0` for every
+      job) — same "no module ships as an empty interface" rule.
 - [ ] **Phase 3 — Distributed training demo.**
   - [ ] DiLoCo-style local SGD (local steps between infrequent outer sync).
   - [ ] Weight-space merging (TIES / task arithmetic) as the

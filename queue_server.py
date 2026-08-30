@@ -36,29 +36,27 @@ from collections import defaultdict
 # =========================
 # ENGINE IMPORTS
 # =========================
-# NOTE: most of tron_runtime is still stubs (returns None / flat constants).
-# Phase 2 replaces GlobalDecisionBrain's scoring with real topology-aware
-# placement; until then it's a thin pass-through kept for interface
-# stability so /next_job doesn't need to change shape twice.
+# Of the original tron_runtime grab-bag, only these three are actually
+# used: SessionManager backs /create_session, SwarmManager's scale signal
+# and LoadShaper feed /next_job, StreamEngine backs /stream. The other
+# eight modules (routing/predictor/auto_scaler/resurrection/memory_mesh/
+# simulation/pricing/market engines) were instantiated but never called —
+# decoration, not behavior — and have been removed along with their
+# imports. GlobalDecisionBrain is no longer one of the stubs: Phase 2
+# rewrote it to score placement from measured topology (see
+# tron/spine/topology.py) instead of returning the job's priority
+# unchanged.
 
 from tron_runtime.session_manager import SessionManager
-from tron_runtime.routing_engine import RoutingEngine
-from tron_runtime.predictor_engine import PredictorEngine
 from tron_runtime.swarm_manager import SwarmManager
-from tron_runtime.auto_scaler import AutoScaler
-from tron_runtime.resurrection_engine import ResurrectionEngine
-from tron_runtime.memory_mesh import MemoryMesh
 from tron_runtime.stream_engine import StreamEngine
-from tron_runtime.simulation_engine import SimulationEngine
-from tron_runtime.pricing_engine import PricingEngine
-from tron_runtime.market_engine import MarketEngine
 from tron_runtime.load_shaper import LoadShaper
 from tron_runtime.global_brain import GlobalDecisionBrain
 
 # =========================
-# EXECUTION SPINE (Phase 1)
+# EXECUTION SPINE (Phase 1 + Phase 2)
 # =========================
-from tron.spine import EventLog, ArtifactStore, Task, content_hash
+from tron.spine import EventLog, ArtifactStore, Task, content_hash, TopologyMap
 
 # =========================
 # ORCHESTRATOR & GPU IMPORTS
@@ -108,30 +106,17 @@ app.add_middleware(
 
 sessions = SessionManager()
 
-router = RoutingEngine()
-predictor = PredictorEngine()
 swarm = SwarmManager()
-autoscaler = AutoScaler()
-resurrection = ResurrectionEngine()
-memory_mesh = MemoryMesh()
 stream_engine = StreamEngine()
-
-simulation_engine = SimulationEngine()
-market = MarketEngine()
-pricing_engine = PricingEngine()
 load_shaper = LoadShaper()
 
-global_brain = GlobalDecisionBrain(
-    pricing_engine,
-    market,
-    load_shaper,
-    swarm,
-    simulation_engine
-)
-
-# Execution spine: one process-wide event log + artifact store.
+# Execution spine: one process-wide event log, artifact store, and
+# topology map (measured worker latency, feeding placement decisions).
 event_log = EventLog()
 artifact_store = ArtifactStore()
+topology = TopologyMap()
+
+global_brain = GlobalDecisionBrain(topology, swarm, load_shaper)
 
 # Initialize integrated orchestrator & vGPU cluster
 orchestrator = None
@@ -252,7 +237,13 @@ def register(worker: dict):
 
 @app.post("/heartbeat/{worker_name}")
 def heartbeat(worker_name: str, request: Request, payload: dict = None):
-    """Worker heartbeat with optional auth validation."""
+    """Worker heartbeat with optional auth validation.
+
+    If the worker reports `latency_ms` (its own measured round-trip time
+    of the *previous* heartbeat call — see worker.py), record it in the
+    topology map. This is the one real signal Phase 2's placement scoring
+    reads; see tron/spine/topology.py and tron_runtime/global_brain.py.
+    """
 
     auth_token = request.headers.get("X-TRON-AUTH")
 
@@ -269,6 +260,14 @@ def heartbeat(worker_name: str, request: Request, payload: dict = None):
         worker["last_heartbeat"] = time.time()
         if payload:
             worker["active_job_id"] = payload.get("active_job_id")
+            latency_ms = payload.get("latency_ms")
+            if isinstance(latency_ms, (int, float)) and latency_ms >= 0:
+                worker["latency_ms"] = latency_ms
+
+    if payload:
+        latency_ms = payload.get("latency_ms")
+        if isinstance(latency_ms, (int, float)) and latency_ms >= 0:
+            topology.record_latency("master", worker_name, float(latency_ms))
 
     return {"alive": True, "worker_name": worker_name}
 
@@ -438,7 +437,7 @@ def next_job(worker_name: str):
                 continue
 
             try:
-                decision = global_brain.decide(job_queue, workers, job)
+                decision = global_brain.decide(job_queue, workers, job, worker_name=worker_name)
                 score = decision.get("score", 0)
             except Exception:
                 score = job.get("priority", 1)

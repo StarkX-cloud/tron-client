@@ -114,14 +114,30 @@ def register_worker():
         raise
 
 
+_last_measured_latency_ms = None
+
+
 def heartbeat(auth_token):
+    """Send a heartbeat, and report the round-trip time of the *previous*
+    heartbeat call so the master can build up a real (not simulated)
+    picture of this worker's network distance — see
+    tron/spine/topology.py and tron_runtime/global_brain.py, which uses
+    this to prefer lower-latency workers when scoring job placement.
+    """
+    global _last_measured_latency_ms
+    payload = {"worker_name": WORKER_NAME, "active_job_id": None}
+    if _last_measured_latency_ms is not None:
+        payload["latency_ms"] = _last_measured_latency_ms
+
+    start = time.time()
     try:
         requests.post(
             f"{TRON_MASTER_URL}/heartbeat/{WORKER_NAME}",
             headers={"X-TRON-AUTH": auth_token},
-            json={"worker_name": WORKER_NAME, "active_job_id": None},
+            json=payload,
             timeout=5,
         )
+        _last_measured_latency_ms = (time.time() - start) * 1000.0
     except Exception:
         pass
 

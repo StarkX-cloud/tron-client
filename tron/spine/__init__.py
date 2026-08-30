@@ -15,6 +15,7 @@ See model.py, store.py, log.py for the pieces; ARCHITECTURE.md for the plan.
 from .model import Artifact, Event, Task, TaskStatus, content_hash
 from .store import ArtifactStore
 from .log import EventLog
+from .topology import TopologyMap
 
 __all__ = [
     "Artifact",
@@ -24,4 +25,5 @@ __all__ = [
     "content_hash",
     "ArtifactStore",
     "EventLog",
+    "TopologyMap",
 ]
