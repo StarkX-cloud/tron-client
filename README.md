@@ -43,9 +43,13 @@ result = expensive_task(10).get()
   sync-every-step baseline, and weight-space merging (task arithmetic +
   TIES) — the small-scale, benchmarked proof of the "train across
   unreliable heterogeneous nodes with near-zero communication" claim.
-  Run `python -m tron.training.benchmark` for the report. See
-  ARCHITECTURE.md for the numbers and what's honestly still missing
-  (real multi-machine execution, a larger model).
+  Run `python -m tron.training.benchmark` for the report.
+  `python -m tron.training.benchmark_lora` runs the same comparison
+  against a real pretrained model (EleutherAI's Pythia-70M) via LoRA —
+  a 717x smaller unit of communication than the full model, verified
+  with a real recorded run (`requirements-training.txt`; ~20 minutes on
+  CPU). See ARCHITECTURE.md for the numbers and what's honestly still
+  missing (real multi-machine execution).
 - **TRON-II** (`tron/orchestrator/`): training orchestration with
   pluggable adapters (Ray, SB3, scikit-learn, Transformers) and an
   outcome-tracking loop that scores adapters by how close their predicted

@@ -73,6 +73,50 @@ technical design behind each phase.
         not actually transmitted over a wire yet).
   - [ ] Not yet done: a public writeup / standalone repo extraction — see
         the "getting noticed" discussion this phase was scoped around.
+- [x] **Phase 3 scale-up — same story, a real pretrained model.**
+      `tron/training/lora_demo.py` + `benchmark_lora.py`: the identical
+      local-SGD / weight-merging comparison, applied to EleutherAI's
+      **Pythia-70M** (a real, recognized small open-weight model — not
+      a hand-rolled net) via **LoRA**, fine-tuned on the tiny-shakespeare
+      corpus (`tron/training/data/tinyshakespeare.txt`, public domain,
+      vendored locally). Run `python -m tron.training.benchmark_lora`.
+      Recorded numbers from an actual run (3 shards, 4 rounds x 5 local
+      steps):
+      - LoRA adapter: **393,216 bytes** vs. the full model's
+        **282,099,712 bytes** — a **717x** smaller unit of communication,
+        before local-SGD's sync-frequency reduction is even counted.
+      - Local SGD: eval loss **4.3296 -> 4.2236** (genuinely decreasing —
+        the pipeline trains correctly), **4,718,592 bytes** over 4 syncs
+        vs. a hypothetical full-model sync at the same cadence
+        (**3,385,196,544 bytes** — the same 717x, compounding with
+        whatever sync-frequency reduction is chosen).
+      - Merge: solo shard losses `[4.283, 4.3703, 4.3146]` (avg 4.3226,
+        zero communication during training) -> merged **4.2403** —
+        recovers most of local SGD's benefit for no communication at all.
+      - This is the concrete demonstration of the "low-rank delta, not a
+        full checkpoint, is the unit of communication" idea from the
+        project's original brief — now real, not conceptual.
+      - **Honest cost:** a full run takes **~20 minutes** on this
+        project's CPU-only dev machine (8 cores, no GPU) — too slow to
+        be a live pytest. `tests/test_lora_demo.py` covers the pure
+        logic fast (shard splitting, byte accounting, adapter averaging
+        — one test hand-verifies the adapter byte count against the
+        LoRA math directly) without downloading or training the real
+        model; the full pipeline was verified manually, once, with the
+        numbers above recorded here rather than re-asserted by CI.
+      - Real bug hit and fixed during this, not a defensive guess: the
+        `hf_xet` fast-transfer backend hung indefinitely downloading
+        model weights on this machine. `HF_HUB_DISABLE_XET=1` (set
+        automatically at the top of `lora_demo.py`) works around it.
+      - New optional dependency group: `requirements-training.txt`
+        (torch, transformers, peft, accelerate, safetensors) — not
+        required for `queue_server.py` or the core test suite.
+  - [ ] Not yet done: still one machine, in-process — the "genuinely
+        separate physical machines" gap above applies here too.
+  - [ ] Not yet done: LoRA adapters aren't wired into the spine
+        (`tron/training/spine_integration.py` only covers the numpy
+        demo) — the Grid can't yet render a LoRA run the way it renders
+        the numpy one.
 - [x] **Phase 4 v1 — The 3D Grid: passive replay.** `tron/grid/index.html`,
       served at `/grid/` by `queue_server.py`. Worker distance from the
       master = real measured heartbeat latency (the same number
