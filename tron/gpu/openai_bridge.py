@@ -195,12 +195,16 @@ def root() -> Dict[str, Any]:
 
 
 def verify_openai_api_key(authorization: Optional[str]) -> None:
-    if not OPENAI_API_KEY:
+    # Read the env var at call time, not import time — TRON_API_KEY can be
+    # set after this module loads (e.g. in tests via monkeypatch, or in
+    # deployments that inject env vars post-import).
+    required_key = os.environ.get("TRON_API_KEY")
+    if not required_key:
         return
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid API key")
     token = authorization.split("Bearer ", 1)[1].strip()
-    if token != OPENAI_API_KEY:
+    if token != required_key:
         raise HTTPException(status_code=401, detail="Missing or invalid API key")
 
 

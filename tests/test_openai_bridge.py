@@ -3,7 +3,7 @@ import importlib
 from fastapi.testclient import TestClient
 
 
-import vgpu.openai_bridge as openai_bridge
+import tron.gpu.openai_bridge as openai_bridge
 
 
 client = TestClient(openai_bridge.app)

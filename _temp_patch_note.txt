@@ -1,1 +1,0 @@
-Patch will update master_scheduler.py (add licensed_racks table, save/load functions, call load_persistent_state on startup, persist on license/optimize) and dashboard/app.py (add rack panel HTML + renderRackList JS and call it after loading racks).
