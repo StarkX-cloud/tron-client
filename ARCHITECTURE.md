@@ -93,10 +93,40 @@ anyone would call "real," is substantial, distinct future work. See
 ROADMAP.md for what's left, including the public writeup this phase was
 originally scoped to produce.
 
-**Phase 4 — The 3D Grid.** Not started, and deliberately last. A renderer
-over `EventLog.replay()` / `snapshot()`: node distance from measured
-topology, pipe width from throughput, node size from load. Time-scrubbable.
-3D code *authoring* is explicitly out of scope — see rationale below.
+**Phase 4 — The 3D Grid (v1: passive replay).** Built: `tron/grid/index.html`,
+served by `queue_server.py` at `/grid/`. It's a static page (three.js,
+vendored locally — not a CDN reference, so it works offline and isn't at
+the mercy of a CDN's availability) that fetches `/workers` and
+`/spine/events` itself and renders:
+
+- Worker distance from the master node = the same measured heartbeat
+  latency `tron/spine/topology.py` and `GlobalDecisionBrain` use for
+  placement — not a layout algorithm's guess. Worker height = reported
+  load. Unmeasured workers sit at a fixed mid-distance (same "don't
+  assume unknown is best or worst" rule as `TopologyMap.rank_nodes`).
+- Tasks positioned at whichever worker the event log says they're
+  actually assigned to, colored by status (queued/running/completed/
+  failed/requeued).
+- A scrubber that replays the event log to any point — this was verified
+  in a real browser during development: scrubbing back to right after 6
+  jobs were submitted but before any were assigned showed exactly the 6
+  grey "queued" markers clustered at the master with no worker
+  assignments, matching what the raw log said at that point. A "Live"
+  toggle tails `/spine/events?since_seq=N` for events after that.
+
+Verified end-to-end against a real running server with real workers at
+different reported latencies (8ms / 60ms / 260ms) — their rendered
+distances from the master matched the position formula exactly (7.2 /
+15.0 / 45.0 world units for `BASE_RADIUS=6 + latency_ms * 0.15`).
+
+**What v1 does not do**, deliberately deferred rather than faked:
+interaction (click a task to inspect its recorded inputs, drag a worker
+to see the scheduler react) — see the "why 3D observation, not 3D
+authoring" rationale below for why passive replay came first. Task
+motion between states is discrete per scrub step, not smoothly animated
+between positions. Worker layout uses only latency (one topology
+signal); bandwidth and pipe-width-from-throughput are not implemented —
+there's no bandwidth prober yet (see ROADMAP.md).
 
 ## Why 3D observation, not 3D authoring
 

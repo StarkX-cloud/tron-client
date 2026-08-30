@@ -6,10 +6,10 @@ heterogeneous, unreliable machines with near-zero communication overhead —
 with a live, causal 3D replay of what the cluster is doing.**
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the technical design and
-[ROADMAP.md](ROADMAP.md) for what's built vs. planned. Short version:
-Phases 1–3 (execution spine, topology-aware scheduling, a small-scale
-distributed training demo) are built and tested; Phase 4 (the 3D Grid) is
-not yet built.
+[ROADMAP.md](ROADMAP.md) for what's built vs. planned. Short version: all
+four phases have a real first version built and tested — the remaining
+work per phase (a bandwidth prober, real multi-machine training, 3D
+interaction, etc.) is tracked in ROADMAP.md rather than glossed over.
 
 This is not a rental-compute marketplace — an earlier billing/royalty layer
 explored that idea and has been removed. See ARCHITECTURE.md's "What was
@@ -55,6 +55,12 @@ result = expensive_task(10).get()
   GPUs' reported specs into one synthetic profile, plus an
   OpenAI-compatible API gateway on top. Explicitly a simulation, not GPU
   virtualization.
+- **The Grid** (`tron/grid/`, served at `/grid/`): a 3D, time-scrubbable
+  replay of the execution spine's event log. Every position is derived
+  from real data — worker distance from measured latency, worker height
+  from load, task position from which worker the log says it's actually
+  on — not a decorative layout. Passive replay only for now; see
+  ARCHITECTURE.md for what's deferred.
 
 ## Install
 

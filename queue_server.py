@@ -13,6 +13,7 @@ try:
     from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
+    from fastapi.staticfiles import StaticFiles
     import uvicorn
     _USE_FASTAPI = True
 except Exception as import_error:
@@ -99,6 +100,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Phase 4: the 3D Grid — a passive, time-scrubbable replay of the
+# execution spine's event log, served at /grid. It's a static page that
+# fetches /workers and /spine/events itself; see tron/grid/index.html.
+if _USE_FASTAPI:
+    _grid_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tron", "grid")
+    if os.path.isdir(_grid_dir):
+        app.mount("/grid", StaticFiles(directory=_grid_dir, html=True), name="grid")
 
 # =========================
 # STATE INIT

@@ -73,11 +73,30 @@ technical design behind each phase.
         not actually transmitted over a wire yet).
   - [ ] Not yet done: a public writeup / standalone repo extraction — see
         the "getting noticed" discussion this phase was scoped around.
-- [ ] **Phase 4 — The 3D Grid.**
-  - [ ] Passive replay view over `EventLog.replay()` — node distance from
-        measured topology, pipe width from throughput, node size from load.
-  - [ ] Time-scrubbing through a real (not scripted) training run.
-  - [ ] Interaction (inspect, re-place, compose) only after the above works.
+- [x] **Phase 4 v1 — The 3D Grid: passive replay.** `tron/grid/index.html`,
+      served at `/grid/` by `queue_server.py`. Worker distance from the
+      master = real measured heartbeat latency (the same number
+      `GlobalDecisionBrain` uses); worker height = reported load; task
+      position = whichever worker the event log actually assigned it to.
+      Time-scrubber replays `/spine/events` to any point — verified in a
+      real browser against a live server: scrubbing to right after 6 jobs
+      were submitted (before any assignment) showed exactly 6 grey
+      "queued" markers at the master, matching the raw log. "Live" mode
+      tails new events. three.js is vendored locally
+      (`tron/grid/three.min.js`, `OrbitControls.js`) rather than loaded
+      from a CDN, so the page works offline.
+  - [ ] Not yet done: pipe width from bandwidth (no bandwidth prober
+        exists yet — only latency is measured; see the note under Phase 2b).
+  - [ ] Not yet done: smooth motion between states (currently discrete
+        per scrub step).
+  - [ ] Not yet done: interaction (click a task to inspect its recorded
+        inputs; drag a worker and watch the scheduler react). Deliberately
+        deferred until the passive replay is solid — see ARCHITECTURE.md's
+        "why 3D observation, not 3D authoring."
+  - [ ] Not yet done: rendering an actual Phase 3 training run live (today
+        it renders `queue_server.py`'s generic job lifecycle, which the
+        training demo doesn't currently emit into — the training demo and
+        the spine log aren't wired together yet).
 
 ## Known follow-ups (not blocking, tracked here so they aren't lost)
 
