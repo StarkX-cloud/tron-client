@@ -139,6 +139,16 @@ CPU-only dev hardware, so the pytest suite covers the pure logic
 a network dependency, rather than re-running the full pipeline on every
 test invocation. Optional dependency group: `requirements-training.txt`.
 
+`tron/training/lora_spine.py` wires this into the spine the same way the
+numpy demo is wired: `run_local_sgd_lora_with_spine` records each shard's
+per-round adapter training as a Task, with the LoRA state dict (~KB) as
+the output Artifact, reusing `lora_demo.py`'s helpers so a parity test
+holds it tensor-for-tensor against the uninstrumented run.
+`benchmark_lora.py --spine-dir DIR` runs the real Pythia local-SGD
+portion through it, so an actual LoRA run is Grid-replayable. Still open:
+running LoRA across the `tron/training/distributed/` wire (adapter as the
+POST body) — the numpy MLP does that, the LoRA path doesn't yet.
+
 **Phase 4 — The 3D Grid (v1: passive replay).** Built: `tron/grid/index.html`,
 served by `queue_server.py` at `/grid/`. It's a static page (three.js,
 vendored locally — not a CDN reference, so it works offline and isn't at
