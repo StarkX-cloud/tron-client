@@ -66,6 +66,12 @@ from tron.training.data import make_classification_dataset, make_non_iid_shards,
 from tron.training.model import TinyMLP
 from tron.training.spine_integration import run_local_sgd_with_spine
 
+# Phase 3 over a real wire: shards as separate processes that POST their
+# parameter vectors to the master, which barrier-averages and serves the
+# merge back. Same math as spine_integration, different transport — see
+# tron/training/distributed/.
+from tron.training.distributed import TrainingSessionRegistry
+
 # =========================
 # ORCHESTRATOR & GPU IMPORTS
 # =========================
@@ -140,6 +146,11 @@ _SPINE_DIR = Path(os.environ.get("TRON_SPINE_DIR", ".tron_spine"))
 event_log = EventLog(path=_SPINE_DIR / "log.db")
 artifact_store = ArtifactStore(root=_SPINE_DIR / "artifacts")
 topology = TopologyMap()
+
+# Registry of over-the-wire distributed training sessions (Phase 3 wire
+# path). Backed by the same event_log / artifact_store as everything else,
+# so a distributed run's Tasks land in the same spine the Grid replays.
+training_sessions = TrainingSessionRegistry()
 
 global_brain = GlobalDecisionBrain(topology, swarm, load_shaper)
 
@@ -551,6 +562,103 @@ def run_training_demo(payload: dict = None):
         "num_syncs": result["num_syncs"],
         "shard_node_ids": result["shard_node_ids"],
     }
+
+
+# =========================
+# DISTRIBUTED TRAINING OVER A REAL WIRE (Phase 3 wire path)
+# =========================
+# Unlike /training/run_demo (shards are in-process objects, bytes counted
+# but never sent), these endpoints let N separate processes — each a
+# `python -m tron.training.distributed.shard_worker` against this URL —
+# actually transmit their parameter vectors. The master stores each as a
+# spine Artifact, barrier-averages once all shards report, and serves the
+# merge back. tests/test_distributed_training.py pins the result to be
+# bit-for-bit identical to the single-process local_sgd run.
+
+def _training_session_or_404(session_id: str):
+    session = training_sessions.get(session_id)
+    if session is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"no training session {session_id}")
+    return session
+
+
+def _bad_request_on_valueerror(fn, *args, **kwargs):
+    """Turn a TrainingSession's ValueError (bad shard/round index, wrong
+    vector length) into a 400 instead of a bare 500."""
+    try:
+        return fn(*args, **kwargs)
+    except ValueError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/training/session")
+def create_training_session(payload: dict = None):
+    payload = payload or {}
+    session_id = payload.get("session_id") or f"trainsess-{uuid.uuid4().hex[:12]}"
+    session = _bad_request_on_valueerror(
+        training_sessions.create,
+        session_id,
+        num_shards=int(payload.get("num_shards", 4)),
+        num_rounds=int(payload.get("num_rounds", 6)),
+        local_steps=int(payload.get("local_steps", 10)),
+        lr=float(payload.get("lr", 0.3)),
+        event_log=event_log,
+        artifact_store=artifact_store,
+        model_kind=payload.get("model_kind", "numpy_mlp"),
+        model_config=payload.get("model_config"),
+        dataset_config=payload.get("dataset_config"),
+        skew=float(payload.get("skew", 0.9)),
+        shard_seed=int(payload.get("shard_seed", 1)),
+    )
+    out = session.status()
+    out["model_config"] = session.model_config
+    return out
+
+
+@app.get("/training/session/{session_id}")
+def get_training_session(session_id: str):
+    session = _training_session_or_404(session_id)
+    out = session.status()
+    out["model_config"] = session.model_config
+    return out
+
+
+@app.get("/training/session/{session_id}/shard/{shard_idx}/data")
+def get_training_shard_data(session_id: str, shard_idx: int):
+    session = _training_session_or_404(session_id)
+    from fastapi.responses import Response
+    blob = _bad_request_on_valueerror(session.shard_data, shard_idx)
+    return Response(content=blob, media_type="application/octet-stream")
+
+
+@app.get("/training/session/{session_id}/round/{round_idx}/init")
+def get_training_round_init(session_id: str, round_idx: int, shard: int):
+    session = _training_session_or_404(session_id)
+    from fastapi.responses import Response
+    blob = _bad_request_on_valueerror(session.round_init, round_idx, shard)
+    if blob is None:
+        return Response(status_code=202)
+    return Response(content=blob, media_type="application/octet-stream")
+
+
+@app.post("/training/session/{session_id}/round/{round_idx}/shard/{shard_idx}")
+async def submit_training_round(session_id: str, round_idx: int, shard_idx: int, request: Request, node_id: str = None):
+    session = _training_session_or_404(session_id)
+    blob = await request.body()
+    return _bad_request_on_valueerror(session.submit_round, round_idx, shard_idx, blob, node_id=node_id)
+
+
+@app.get("/training/session/{session_id}/result")
+def get_training_result(session_id: str):
+    session = _training_session_or_404(session_id)
+    res = session.result()
+    if res is None:
+        from fastapi.responses import Response
+        return Response(status_code=202)
+    return res
+
 
 # =========================
 # NEXT JOB (scheduling)
