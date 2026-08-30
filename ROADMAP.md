@@ -212,15 +212,35 @@ technical design behind each phase.
       tails new events. three.js is vendored locally
       (`tron/grid/three.min.js`, `OrbitControls.js`) rather than loaded
       from a CDN, so the page works offline.
-  - [ ] Not yet done: pipe width from bandwidth. The bandwidth prober now
-        exists (Phase 2c) and `/workers` exposes `bandwidth_mbps_down` per
-        worker — the Grid just doesn't render it as pipe thickness yet.
-  - [ ] Not yet done: smooth motion between states (currently discrete
-        per scrub step).
-  - [ ] Not yet done: interaction (click a task to inspect its recorded
-        inputs; drag a worker and watch the scheduler react). Deliberately
-        deferred until the passive replay is solid — see ARCHITECTURE.md's
-        "why 3D observation, not 3D authoring."
+- [x] **Phase 4 v2 — Grid interaction, pipe width, smooth motion.**
+      Passive replay came first on purpose; it's solid, so v2 adds:
+  - **Pipe width = measured bandwidth.** The master->worker link is a
+    tube whose radius comes from `bandwidth_mbps_down` (Phase 2c);
+    unmeasured links are drawn hair-thin, not assumed fat — same rule as
+    latency distance. Verified in a real browser: fast-w (300 Mbps) pipe
+    radius 0.12, mid-w (40) 0.042, slow-w (6) 0.032, unmeasured shards
+    0.03 — matches `bandwidthRadius()` exactly.
+  - **Click a task -> inspector.** Raycast onto the task marker, fold
+    that task's events out of the already-loaded log (no new fetch), show
+    id / status / node / attempt / fn+output hashes / lineage events, and
+    for training tasks the round·shard, the bytes transferred, and the
+    adapter-vs-full-model size ratio.
+  - **Shift-drag a worker -> "what would the scheduler do?".** Dragging a
+    worker radially maps its new distance back to a hypothetical latency
+    (inverse of the placement formula) and `POST`s it to
+    `/scheduler/whatif`, which re-runs `tron/spine/matcher.py` against a
+    throwaway topology + copies of the live queue and idle workers —
+    **touching no real state** — and returns the assignment it *would*
+    produce next to the baseline. Reassigned jobs are drawn as bright
+    links; the worker snaps back (it was a question, not a move). 5 tests
+    in `tests/test_grid_whatif.py` (non-destructive, reflects the
+    matcher's real latency and bandwidth scoring, empty-queue case).
+  - **Smooth motion.** Task markers ease toward their target position
+    each frame (`position.lerp`) instead of snapping on every scrub step.
+  - The three.js interactions were verified in a real browser against a
+    live server (worker picking, the click->inspector round trip, the
+    drag->what-if round trip, zero console errors) — the same standard
+    Grid v1 was held to.
 - [x] **Phase 3 -> Phase 1 wiring.** `tron/training/spine_integration.py`:
       `run_local_sgd_with_spine` records each shard's per-round training
       as a real Task in the spine log (queued -> assigned -> started ->
