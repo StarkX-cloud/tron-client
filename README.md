@@ -1,31 +1,26 @@
-# TRON — Lightweight Distributed Compute for AI and Python Developers
+# TRON
 
-**TRON is a lightweight AI compute orchestrator and Python SDK for distributed-computing, task-orchestration, and parallel-processing.**
+TRON is a distributed execution runtime for Python, being rebuilt around a
+single goal: **run real compute and training workloads across
+heterogeneous, unreliable machines with near-zero communication overhead —
+with a live, causal 3D replay of what the cluster is doing.**
 
-Build distributed AI and analytics systems without enterprise DevOps. TRON makes remote execution feel like local Python by combining a lightweight SDK, the `@tron.remote` decorator, and the transparent `MagicFuture` engine.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the technical design and
+[ROADMAP.md](ROADMAP.md) for what's built vs. planned. Short version: all
+four phases have a real first version built and tested — the remaining
+work per phase (a bandwidth prober, real multi-machine training, 3D
+interaction, etc.) is tracked in ROADMAP.md rather than glossed over.
 
-- **AI-first orchestration:** designed for model scoring, simulation, risk analytics, feature engineering, and ML pipelines
-- **Problem-first search:** solves distributed Python compute, remote function execution, self-hosted inference, and task orchestration search queries
-- **Easy discovery:** package name and docs are aligned for `tron-client-py`, distributed compute, self-hosted AI, and Python orchestration searches
+This is not a rental-compute marketplace — an earlier billing/royalty layer
+explored that idea and has been removed. See ARCHITECTURE.md's "What was
+cut" section for why.
 
-## Problems TRON solves
-
-- Find TRON when searching for distributed Python compute solutions.
-- Find TRON when you need self-hosted AI inference or model scoring.
-- Find TRON when you want a lightweight alternative to Ray and Celery.
-
-- **SDK:** lightweight client available via PyPI
-- **Server:** self-hosted on Cloud Run, Fly.io, Docker, VPS, laptop, or any cloud
-- **No vendor lock-in:** your infrastructure, your data, your policies
-
-Make distributed AI compute feel local and seamless:
+## What's here today
 
 ```python
 import tron
 
-# Ensure a TRON server is available automatically.
-# This will connect to an existing server or start a local one.
-tron.ensure_server()
+tron.ensure_server()  # connects to an existing server, or starts a local one
 
 @tron.remote
 def expensive_task(x):
@@ -34,345 +29,92 @@ def expensive_task(x):
 result = expensive_task(10).get()
 ```
 
-With the current SDK, developers can treat TRON as a client-first platform: the SDK auto-discovers or starts a local runtime as needed, so they rarely need to run `queue_server.py` manually.
+- **SDK** (`tron/`): `@tron.remote` + `MagicFuture` make remote execution
+  look like a normal function call. Functions are shipped via cloudpickle.
+- **Server** (`queue_server.py`): FastAPI job queue, worker registration
+  and heartbeat, a watchdog that recovers a dead worker's in-flight work.
+- **Execution spine** (`tron/spine/`): content-addressed artifacts,
+  append-only replayable event log, real latency-aware placement
+  (`topology.py`), and a periodic optimal-assignment match step
+  (`matcher.py`, via `scipy.optimize.linear_sum_assignment`) for actual
+  cross-worker job placement. `/spine/events` and `/spine/task/{id}`
+  expose the raw log — this is the substrate Phase 4's Grid builds on.
+- **Training demo** (`tron/training/`): DiLoCo-style local SGD vs. a
+  sync-every-step baseline, and weight-space merging (task arithmetic +
+  TIES) — the small-scale, benchmarked proof of the "train across
+  unreliable heterogeneous nodes with near-zero communication" claim.
+  Run `python -m tron.training.benchmark` for the report. See
+  ARCHITECTURE.md for the numbers and what's honestly still missing
+  (real multi-machine execution, a larger model).
+- **TRON-II** (`tron/orchestrator/`): training orchestration with
+  pluggable adapters (Ray, SB3, scikit-learn, Transformers) and an
+  outcome-tracking loop that scores adapters by how close their predicted
+  cost/capability gain was to reality. Not yet wired to a real training
+  workload — see ROADMAP.md.
+- **vGPU** (`tron/gpu/`): a simulation layer that aggregates multiple
+  GPUs' reported specs into one synthetic profile, plus an
+  OpenAI-compatible API gateway on top. Explicitly a simulation, not GPU
+  virtualization.
+- **The Grid** (`tron/grid/`, served at `/grid/`): a 3D, time-scrubbable
+  replay of the execution spine's event log. Every position is derived
+  from real data — worker distance from measured latency, worker height
+  from load, task position from which worker the log says it's actually
+  on — not a decorative layout. Passive replay only for now; see
+  ARCHITECTURE.md for what's deferred.
 
-For local development, the SDK also supports launching a complete local runtime automatically:
-
-```python
-tron.start_local_environment()
-# ... run remote tasks ...
-tron.stop_local_worker()
-```
-
-You can also start a worker directly if you want to control just the worker lifecycle:
-
-```python
-tron.start_local_worker()
-# ... run remote tasks ...
-tron.stop_local_worker()
-```
-
-## Why TRON?
-
-- **Built for AI teams:** delivers distributed compute without the usual enterprise orchestration overhead
-- **True native Python:** `@tron.remote` functions behave like normal calls, with the engine handling remote execution
-- **Transparent results:** `MagicFuture` resolves results automatically, with no extra `.get()` plumbing in most cases
-- **Self-hosted control:** run your backend on any platform and keep your compute private
-- **No hidden infra:** no Spark clusters, no Kubernetes manifests, no Celery brokers, no result backend tuning
-
-## TRON vs. Ray vs. Celery
-
-| Capability | TRON | Ray | Celery |
-|---|---|---|---|
-| Remote function syntax | `@tron.remote` on a normal Python function | `@ray.remote` plus `.remote()` call | `@app.task` plus `delay()` / `apply_async()` |
-| Result model | `MagicFuture` transparent future with `.get()` and `await` support | Ray ObjectRef with `ray.get()` | AsyncResult with backend and broker configuration |
-| Infrastructure setup | Minimal self-hosted runtime | Ray cluster setup / `ray.init()` | Broker + result backend + worker pool |
-| Configuration complexity | Low | Medium to high | High |
-| Best for | AI compute, batch model scoring, risk/simulation workloads | general distributed Python compute | task queues, background jobs |
-| Deployment | Docker, Cloud Run, VPS, local laptop | Kubernetes, AWS, on-prem cluster | Celery broker and result backend infrastructure |
-| Developer experience | Normal Python function calls | special remote API call syntax | task-oriented API |
-
-TRON is the right fit when your team wants distributed compute power without complex cluster configuration errors. The SDK is lightweight, the compute model is declarative, and the core experience is: write Python, decorate with `@tron.remote`, and let TRON orchestrate the rest.
-
-## Install the SDK
-
-```bash
-## Local install while the package is not yet published to PyPI
-python -m pip install dist/tron_client_py-0.1.5-py3-none-any.whl
-```
-
-If you want the published release wheel, install directly from GitHub:
-
-```bash
-pip install https://github.com/StarkX-cloud/tron-client/releases/download/v0.1.5/tron_client_py-0.1.5-py3-none-any.whl
-```
-
-Once published to PyPI, this can become:
-
-```bash
-python -m pip install tron-client-py
-```
-
-If you are developing the repo itself, use:
+## Install
 
 ```bash
 python -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
+.\.venv\Scripts\Activate.ps1   # or: source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## One-line Worker Bootstrap
-
-Once your TRON master is running, you can bootstrap a worker with the one-liner installers below.
-
-### Linux / macOS (bash)
+For running tests:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/starkgenex-alt/TRON/main/install_tron.sh | TRON_MASTER_URL=https://<your-tron-master>.onrender.com START_WORKER=true bash
+pip install -r requirements-dev.txt
+pytest
 ```
 
-### Windows PowerShell
-
-```powershell
-$env:TRON_MASTER_URL='https://<your-tron-master>.onrender.com'
-$env:START_WORKER='true'
-python install_tron.py
-```
-
-These installers will:
-- detect GPU support with `nvidia-smi`
-- register the worker with the master
-- optionally start the worker process in the background
-
-If you want to inspect the script first, use:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/starkgenex-alt/TRON/main/install_tron.sh -o install_tron.sh
-less install_tron.sh
-```
-
-For a local master, replace the Render URL with `http://127.0.0.1:9000`.
-
-## Basic usage
-
-```python
-import tron
-
-@tron.remote
-def add_numbers(a, b):
-    return a + b
-
-result = add_numbers(1, 2).get()
-print(result)
-```
-
-## Client-side flow
-
-Users should only ever do this:
-
-1. install the SDK locally for now: `python -m pip install dist/tron_client_py-0.1.5-py3-none-any.whl`
-    - once published, this becomes: `python -m pip install tron-client-py`
-2. write Python functions with `@tron.remote`
-3. optionally configure the backend URL with `tron.config(...)`
-4. call `.get()` on futures
-
-Example:
-
-```python
-import tron
-
-tron.config("http://localhost:9000")
-
-@tron.remote
-def add(a, b):
-    return a + b
-
-print(add(2, 3).get())
-```
-
-## Quick Start: Deploy your own TRON
-
-Pick your platform and deploy in minutes:
-
-### Cloud Run (free tier, easiest)
-```bash
-./deploy/cloud-run-quick.sh
-```
-
-### Fly.io (global, free tier)
-```bash
-./deploy/fly-quick.sh
-```
-
-### Render (simple web service)
-```bash
-./deploy/render-quick.sh
-```
-
-### Local Docker (dev/testing)
-
-**Start the full stack:**
-
-```bash
-docker compose up --build
-```
-
-This starts:
-- **Queue Server**: `http://localhost:9000` (FastAPI backend)
-- **Dashboard**: `http://localhost:8501` (Streamlit UI for monitoring)
-- **Workers** (2 replicas): auto-connect to server
-
-For background mode:
-
-```bash
-docker compose up --build -d
-```
-
-**Monitor platform earnings and jobs:**
-Open `http://localhost:8501` in your browser to see:
-- Active workers and jobs
-- Real-time platform balance and royalty earnings (15% per job)
-- Ledger of all completed jobs with billing details
-- ROI simulator for capacity planning
-
-See [SELF_HOST.md](SELF_HOST.md) for detailed guides and customization.
-
-If Docker is unstable, run the server directly:
+## Run the server
 
 ```bash
 python queue_server.py
 ```
 
-## Developer workflow
+Starts on `http://0.0.0.0:9000` by default (`TRON_PORT` / `TRON_HOST` to
+change). Point the SDK at it:
 
-Once your team deploys a TRON server, developers:
-
-1. Install the SDK locally for now: `python -m pip install dist/tron_client_py-0.1.5-py3-none-any.whl`
-    - once published, this becomes: `python -m pip install tron-client-py`
-2. Get the server URL from your team
-3. Add to code:
-   ```python
-   import tron
-   tron.config("https://your-team-server")
-   ```
-4. Write normal Python with `@tron.remote`
-5. Call `.get()` to fetch results
-
-Developers do not need to run or change `queue_server.py`.
-That file is the backend server implementation, and it is managed by your infrastructure or operations team.
-
-See [USER_GUIDE.md](USER_GUIDE.md) for detailed examples.
-
-## Troubleshooting — Quick Fixes
-
-### I can't connect to the server
-If `tron.ensure_server()` can't find a server, run `tron.start_local_environment()` or ensure `tron.config(url)` points to your backend. Common fix: open port 9000 and retry.
-
-### Installation issues
-If `pip install tron-client-py` fails while unpublished, install the wheel locally: `python -m pip install dist/tron_client_py-0.1.5-py3-none-any.whl`.
-
-### Common error: MagicFuture timeouts
-Increase worker timeout in `tron.config(timeout=...)` or scale your workers.
-
-## How TRON is structured
-
-- `tron/` — client SDK, `@remote` decorator, `MagicFuture` for transparent `.get()`
-- `queue_server.py` — FastAPI backend, job submission, status tracking
-- `worker.py` — task execution, resource management
-- `Dockerfile` — containerized runtime for any cloud
-- `.github/workflows/deploy-cloud-run.yml` — auto-deploy to Cloud Run on push
-
-## Architecture
-
-```
-Developer                         Operator
-    |                                |
-    | pip install tron-client-py    | docker compose up --build
-    |                                |
-    v                                v
-[ @tron.remote ]          [ Queue Server (FastAPI) ]
-    |                          |
-    | tron.config(url)         | registers workers
-    |                          | tracks jobs
-    v                          | calculates royalties (15%)
-[ Remote execution ]       |
-                           v
-                     [ Dashboard (Streamlit) ]
-                       - Monitor balance
-                       - View ledger
-                       - ROI simulator
-                       - Real-time metrics
+```python
+import tron
+tron.set_config_url("http://localhost:9000")
 ```
 
-## Production Features
-
-✅ **Automatic Royalty Accounting**: 15% platform share routed atomically on job completion  
-✅ **Ledger Persistence**: Full job history with billing, payout, and earnings tracking  
-✅ **Platform Balance API**: Real-time `/platform/balance` endpoint for operators  
-✅ **Dashboard UI**: Monitor workers, jobs, and earnings via Streamlit  
-✅ **Docker Compose**: One-command deployment with workers, server, and dashboard  
-✅ **One-line Worker Bootstrap**: Free GitHub-hosted installer with GPU auto-detection
-    |
-    +---> Queue (job storage)
-    +---> Workers (parallel execution)
-    +---> Results (stream back to SDK)
-```
-
-## For operators / infrastructure teams
-
-Your job: deploy TRON once, keep it running.
-
-Developers' job: use the SDK.
-
-Deployment is simple:
-
-1. Pick a platform (Cloud Run, Fly.io, Docker, etc.)
-2. Run the deploy script or follow [SELF_HOST.md](SELF_HOST.md)
-3. Share the server URL with developers
-4. Done
-
-No vendor lock-in. You own the infrastructure.
-
-## Billing API
-
-TRON exposes customer billing endpoints for authenticated usage tracking and invoicing.
-
-- `POST /admin/customer/create` — create a new customer and API key
-- `POST /api/v1/submit` — authenticated job submission with `X-API-Key` or `Authorization: Bearer <key>`
-- `GET /api/v1/billing/charges` — list recent customer charges
-- `GET /api/v1/billing/summary` — customer billing summary and usage
-- `GET /api/v1/invoices` — authenticated invoice listing
-
-Example job submission:
+Or with Docker:
 
 ```bash
-curl -X POST http://localhost:9000/api/v1/submit   -H "X-API-Key: <customer_api_key>"   -H "Content-Type: application/json"   -d '{
-    "task_type": "compute",
-    "prompt": "run analysis",
-    "priority": 2,
-    "gpu": false,
-    "memory_gb": 2,
-    "function": {"name": "noop", "args": []}
-  }'
+docker compose up --build
 ```
 
-Customer billing works with the same TRON job lifecycle as the rest of the platform: jobs are billed on completion, ledger entries are persisted, and invoices can be generated from the billing database.
-
-### Enterprise, Sovereign & NDPR Compliance Support
-
-Running `tron-client` in a highly regulated banking, FinTech, or sensitive corporate AI environment? We provide enterprise deployment and SLA services that include:
-
-- Dedicated self-hosted deployment architecture
-- Data residency guarantees and NDPR/sovereign compliance
-- Custom SLAs, on-prem installers, and hardened deployment manifests
-
-If you need a customized enterprise deployment or an automated licensing workflow, connect with our engineering desk:
-
-👉 **[Click Here to Request Automated Enterprise Licensing & Custom Deployment Support](https://tally.so/r/Bz6Lg7)**
-
----
-
-
-## Building the package
-
-If you want to build the client package for distribution:
+## Worker bootstrap
 
 ```bash
-python -m pip install --upgrade build
-python -m build --sdist --wheel
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/starkgenex-alt/TRON/main/install_tron.sh \
+  | TRON_MASTER_URL=http://127.0.0.1:9000 START_WORKER=true bash
 ```
 
-Test locally:
-
-```bash
-python -m pip install dist/tron_client_py-0.1.5-py3-none-any.whl
-python -c "import tron; print(tron.__name__)"
+```powershell
+# Windows
+$env:TRON_MASTER_URL='http://127.0.0.1:9000'
+$env:START_WORKER='true'
+python install_tron.py
 ```
 
-## Documentation
+## Contributing / picking up a phase
 
-- [SELF_HOST.md](SELF_HOST.md) - Complete self-hosting guide (Cloud Run, Fly.io, Render, Docker, etc.)
-- [USER_GUIDE.md](USER_GUIDE.md) - For developers using TRON
-- [QUICKSTART.md](QUICKSTART.md) - Quick usage tutorial
-- [deploy/README.md](deploy/README.md) - Deployment reference
-- [MAGIC_GUIDE.md](MAGIC_GUIDE.md) - Advanced TRON behavior and design
+See [ROADMAP.md](ROADMAP.md) for the current phase breakdown. Phase 2
+(topology-aware scheduling) and Phase 3 (the distributed training demo) are
+the highest-leverage places to contribute right now — both are unstarted
+and both are described concretely enough to pick up directly.

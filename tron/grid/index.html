@@ -1,0 +1,366 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TRON Grid</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #05070a; overflow: hidden; font-family: -apple-system, Segoe UI, sans-serif; }
+  #canvas-holder { position: absolute; inset: 0; }
+  #hud {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px; background: linear-gradient(to bottom, rgba(5,7,10,0.9), rgba(5,7,10,0));
+    color: #cfe8ff; font-size: 13px;
+  }
+  #hud input[type="text"] { background: #10151c; border: 1px solid #2a3644; color: #cfe8ff; padding: 4px 8px; border-radius: 4px; width: 220px; }
+  #hud button { background: #16202b; border: 1px solid #2a3644; color: #cfe8ff; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+  #hud button:hover { background: #1d2c3b; }
+  #hud button.active { background: #1c5f8a; border-color: #2e8bc0; }
+  #scrubber { flex: 1 1 260px; }
+  #status { position: absolute; bottom: 10px; left: 14px; z-index: 10; color: #6f8ba3; font-size: 12px; }
+  #legend { position: absolute; bottom: 10px; right: 14px; z-index: 10; color: #a9c3d9; font-size: 12px; text-align: right; line-height: 1.6; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+  #error { position: absolute; top: 60px; left: 14px; z-index: 10; color: #ff8080; font-size: 12px; white-space: pre-wrap; max-width: 60%; }
+</style>
+</head>
+<body>
+<div id="canvas-holder"></div>
+<div id="hud">
+  <input id="server-url" type="text" placeholder="http://localhost:9000">
+  <button id="connect-btn">Connect</button>
+  <input id="scrubber" type="range" min="0" max="0" value="0" disabled>
+  <span id="scrub-label">0 / 0</span>
+  <button id="live-btn">Live</button>
+</div>
+<div id="status">not connected</div>
+<div id="error"></div>
+<div id="legend">
+  queued <span class="dot" style="background:#7d8b99"></span><br>
+  running <span class="dot" style="background:#e8b23a"></span><br>
+  completed <span class="dot" style="background:#3ad67a"></span><br>
+  failed <span class="dot" style="background:#e8453a"></span><br>
+  requeued <span class="dot" style="background:#e87a3a"></span>
+</div>
+
+<!-- Vendored locally (not a CDN reference) so this page works fully
+     offline and isn't at the mercy of a CDN's availability — consistent
+     with the rest of Phase 3/4 being self-contained and reproducible.
+     Source: three.js r128 (three.min.js, examples/js/controls/OrbitControls.js). -->
+<script src="./three.min.js"></script>
+<script src="./OrbitControls.js"></script>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------
+// TRON Grid — Phase 4, v1: a passive, time-scrubbable 3D replay of the
+// execution spine's event log. See ARCHITECTURE.md's "Why 3D
+// observation, not 3D authoring" for why this exists as a replay viewer
+// and deliberately does not let you edit code here.
+//
+// The rule that makes this more than decoration: every spatial position
+// below is DERIVED from real server data, never assigned for visual
+// effect. Worker distance from the master node comes from
+// tron/spine/topology.py's measured heartbeat latency (the same number
+// GlobalDecisionBrain uses for placement); worker height comes from
+// reported load; a task's position comes from which worker it's
+// actually assigned to, per the real event log — not from a layout
+// algorithm.
+// ---------------------------------------------------------------------
+
+const state = {
+  serverUrl: "",
+  events: [],       // full event log fetched so far, in order
+  workers: {},      // name -> worker info from /workers (includes latency_ms, load)
+  scrubIndex: 0,    // how many events (from the start) are "folded in" right now
+  live: false,
+  pollTimer: null,
+};
+
+// -- fold: same logic as tron/spine/log.py's EventLog._fold, in JS -----
+
+function foldTasks(events, uptoIndex) {
+  const tasks = new Map();
+  for (let i = 0; i < uptoIndex; i++) {
+    const e = events[i];
+    let task = tasks.get(e.task_id);
+    if (e.type === "queued") {
+      if (!task) {
+        task = { taskId: e.task_id, status: "queued", nodeId: null, fnHash: e.data.fn_hash, lastEventAt: e.timestamp };
+        tasks.set(e.task_id, task);
+      }
+      task.status = "queued";
+      task.lastEventAt = e.timestamp;
+      continue;
+    }
+    if (!task) {
+      task = { taskId: e.task_id, status: "queued", nodeId: null, lastEventAt: e.timestamp };
+      tasks.set(e.task_id, task);
+    }
+    task.lastEventAt = e.timestamp;
+    if (e.type === "assigned") {
+      task.status = "assigned";
+      task.nodeId = e.data.node_id || e.node_id || task.nodeId;
+    } else if (e.type === "started") {
+      task.status = "running";
+      task.nodeId = e.data.worker || e.data.node_id || e.node_id || task.nodeId;
+    } else if (e.type === "completed") {
+      task.status = "completed";
+    } else if (e.type === "failed") {
+      task.status = "failed";
+    } else if (e.type === "requeued") {
+      task.status = "requeued";
+      task.nodeId = null;
+    }
+  }
+  return tasks;
+}
+
+// -- stable layout: same worker always lands in the same place across
+// reloads (a name hash, not insertion order) -----------------------
+
+function hashAngle(name) {
+  // FNV-1a + a murmur3-style finalizer, not a plain polynomial hash.
+  // A plain `h = h*31 + charCode` hash was tried first and rejected: for
+  // sequential names sharing a prefix ("shard-0", "shard-1", "shard-2",
+  // ...) — the single most common worker-naming pattern in this system —
+  // it produced angles within a few degrees of each other (e.g. 89/90/91/92),
+  // stacking every shard node almost on top of itself instead of spreading
+  // them around the circle. The finalizer's extra mixing gives a real
+  // avalanche property: a 1-character difference scatters across the full
+  // 360 degrees instead of nudging the angle by a fraction of a degree.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < name.length; i++) {
+    h ^= name.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return ((h >>> 0) % 360) * (Math.PI / 180);
+}
+
+const MASTER_POS = new THREE.Vector3(0, 0, 0);
+const BASE_RADIUS = 6;
+const LATENCY_RADIUS_SCALE = 0.15;   // ms -> world units
+const UNMEASURED_RADIUS = BASE_RADIUS + 8; // unmeasured workers sit mid-out, not assumed-close
+
+function workerPosition(name, info) {
+  const angle = hashAngle(name);
+  const latency = (info && typeof info.latency_ms === "number") ? info.latency_ms : null;
+  const radius = latency === null ? UNMEASURED_RADIUS : BASE_RADIUS + latency * LATENCY_RADIUS_SCALE;
+  const load = (info && info.load) || 0;
+  const height = Math.min(6, load * 0.8); // derived from reported load, not decorative
+  return new THREE.Vector3(radius * Math.cos(angle), height, radius * Math.sin(angle));
+}
+
+const STATUS_COLOR = {
+  queued: 0x7d8b99,
+  assigned: 0xe8b23a,
+  running: 0xe8b23a,
+  completed: 0x3ad67a,
+  failed: 0xe8453a,
+  requeued: 0xe87a3a,
+};
+
+// -- three.js scene ----------------------------------------------------
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x05070a, 0.012);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
+camera.position.set(20, 16, 20);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+document.getElementById("canvas-holder").appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+scene.add(new THREE.AmbientLight(0x8899aa, 0.6));
+const keyLight = new THREE.PointLight(0xffffff, 1.2, 200);
+keyLight.position.set(30, 40, 30);
+scene.add(keyLight);
+
+// ground grid, purely for spatial reference — not data
+const grid = new THREE.GridHelper(80, 40, 0x1c2a38, 0x11181f);
+scene.add(grid);
+
+// master node
+const masterMesh = new THREE.Mesh(
+  new THREE.IcosahedronGeometry(1.1, 1),
+  new THREE.MeshStandardMaterial({ color: 0x4fd2ff, emissive: 0x0c3a4a, roughness: 0.3 })
+);
+masterMesh.position.copy(MASTER_POS);
+scene.add(masterMesh);
+
+const workerMeshes = new Map();   // name -> THREE.Mesh
+const workerLines = new Map();    // name -> THREE.Line (master -> worker)
+const taskMeshes = new Map();     // task_id -> THREE.Mesh
+
+function ensureWorkerVisual(name, info) {
+  const pos = workerPosition(name, info);
+  let mesh = workerMeshes.get(name);
+  if (!mesh) {
+    mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.55, 20, 20),
+      new THREE.MeshStandardMaterial({ color: 0x3a6ea8, roughness: 0.5 })
+    );
+    scene.add(mesh);
+    workerMeshes.set(name, mesh);
+
+    const lineGeom = new THREE.BufferGeometry().setFromPoints([MASTER_POS, pos]);
+    const line = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({ color: 0x22384a, transparent: true, opacity: 0.6 }));
+    scene.add(line);
+    workerLines.set(name, line);
+  }
+  mesh.position.copy(pos);
+  mesh.material.color.set((info && info.status === "offline") ? 0x552222 : 0x3a6ea8);
+  const line = workerLines.get(name);
+  line.geometry.setFromPoints([MASTER_POS, pos]);
+  return pos;
+}
+
+function ensureTaskVisual(task) {
+  let mesh = taskMeshes.get(task.taskId);
+  if (!mesh) {
+    mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 12, 12),
+      new THREE.MeshStandardMaterial({ color: STATUS_COLOR[task.status] || 0xffffff, emissive: 0x111111 })
+    );
+    scene.add(mesh);
+    taskMeshes.set(task.taskId, mesh);
+  }
+  mesh.material.color.set(STATUS_COLOR[task.status] || 0xffffff);
+
+  if (task.nodeId && workerMeshes.has(task.nodeId)) {
+    // sit just off the worker, not exactly inside it, so many tasks on
+    // one worker are still individually visible
+    const base = workerMeshes.get(task.nodeId).position;
+    const jitter = hashAngle(task.taskId);
+    mesh.position.set(base.x + Math.cos(jitter) * 0.9, base.y + 0.9, base.z + Math.sin(jitter) * 0.9);
+  } else {
+    const jitter = hashAngle(task.taskId);
+    mesh.position.set(Math.cos(jitter) * 2.2, 0.6, Math.sin(jitter) * 2.2);
+  }
+  mesh.visible = true;
+  return mesh;
+}
+
+function render() {
+  requestAnimationFrame(render);
+  controls.update();
+  renderer.render(scene, camera);
+}
+render();
+
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// -- data + UI wiring ----------------------------------------------------
+
+const els = {
+  serverUrl: document.getElementById("server-url"),
+  connectBtn: document.getElementById("connect-btn"),
+  scrubber: document.getElementById("scrubber"),
+  scrubLabel: document.getElementById("scrub-label"),
+  liveBtn: document.getElementById("live-btn"),
+  status: document.getElementById("status"),
+  error: document.getElementById("error"),
+};
+
+function showError(msg) { els.error.textContent = msg || ""; }
+
+function applyScrub() {
+  const tasks = foldTasks(state.events, state.scrubIndex);
+  for (const [, mesh] of taskMeshes) mesh.visible = false; // hide anything not present as-of this point
+  for (const task of tasks.values()) ensureTaskVisual(task);
+
+  const total = state.events.length;
+  els.scrubber.max = String(Math.max(0, total - 1));
+  els.scrubber.value = String(Math.max(0, state.scrubIndex - 1));
+  els.scrubLabel.textContent = `${state.scrubIndex} / ${total}`;
+}
+
+async function fetchJSON(path) {
+  const res = await fetch(state.serverUrl + path);
+  if (!res.ok) throw new Error(`${path} -> HTTP ${res.status}`);
+  return res.json();
+}
+
+async function refreshWorkers() {
+  const workers = await fetchJSON("/workers");
+  state.workers = workers;
+  for (const [name, info] of Object.entries(workers)) ensureWorkerVisual(name, info);
+}
+
+async function connect() {
+  showError("");
+  state.serverUrl = (els.serverUrl.value || "").replace(/\/$/, "") || window.location.origin;
+  try {
+    await refreshWorkers();
+    const data = await fetchJSON("/spine/events?since_seq=0");
+    state.events = data.events;
+    state.scrubIndex = state.events.length;
+    els.scrubber.disabled = false;
+    applyScrub();
+    els.status.textContent = `connected to ${state.serverUrl} — ${state.events.length} events, ${Object.keys(state.workers).length} workers`;
+  } catch (err) {
+    showError("Connect failed: " + err.message + "\n(Is the server running, and CORS-reachable from this page?)");
+    els.status.textContent = "not connected";
+  }
+}
+
+async function pollLive() {
+  if (!state.live) return;
+  try {
+    const lastSeq = state.events.length ? state.events[state.events.length - 1].seq : 0;
+    const data = await fetchJSON(`/spine/events?since_seq=${lastSeq}`);
+    if (data.events.length) {
+      state.events = state.events.concat(data.events);
+      state.scrubIndex = state.events.length; // live mode always tracks the tip
+      await refreshWorkers();
+      applyScrub();
+      els.status.textContent = `connected to ${state.serverUrl} — ${state.events.length} events, ${Object.keys(state.workers).length} workers (live)`;
+    }
+  } catch (err) {
+    showError("Live poll failed: " + err.message);
+  }
+  state.pollTimer = setTimeout(pollLive, 1000);
+}
+
+els.connectBtn.addEventListener("click", connect);
+els.serverUrl.addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+
+els.scrubber.addEventListener("input", () => {
+  state.live = false;
+  els.liveBtn.classList.remove("active");
+  clearTimeout(state.pollTimer);
+  state.scrubIndex = parseInt(els.scrubber.value, 10) + 1;
+  applyScrub();
+});
+
+els.liveBtn.addEventListener("click", () => {
+  state.live = !state.live;
+  els.liveBtn.classList.toggle("active", state.live);
+  if (state.live) {
+    state.scrubIndex = state.events.length;
+    applyScrub();
+    pollLive();
+  } else {
+    clearTimeout(state.pollTimer);
+  }
+});
+
+// default to same-origin (works out of the box when served from
+// queue_server.py's /grid mount)
+els.serverUrl.value = window.location.origin.startsWith("http") && window.location.protocol !== "file:"
+  ? window.location.origin
+  : "http://localhost:9000";
+</script>
+</body>
+</html>

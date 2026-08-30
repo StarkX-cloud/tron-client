@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 
-from vgpu.cluster import VirtualGPUCluster
+from .cluster import VirtualGPUCluster
 
 DATABASE_PATH = Path("tron_vgpu_master.db")
 AUTH_TOKEN_HEADER = "X-TRON-AUTH"

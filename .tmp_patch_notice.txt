@@ -1,2 +1,0 @@
-Patching dashboard/app.py: normalize /workers and /active_jobs responses to return lists when backend uses dicts.
-Then updating todo list statuses.
