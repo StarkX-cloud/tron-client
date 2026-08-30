@@ -76,3 +76,52 @@ def test_invalid_smoothing_rejected():
         TopologyMap(smoothing=0.0)
     with pytest.raises(ValueError):
         TopologyMap(smoothing=1.5)
+
+
+# -- Phase 2c: bandwidth, stored with the same EWMA + age-out machinery --
+
+
+def test_unmeasured_bandwidth_is_none(topology):
+    assert topology.bandwidth("master", "worker-1") is None
+
+
+def test_record_and_read_bandwidth(topology):
+    topology.record_bandwidth("master", "worker-1", 100.0)
+    assert topology.bandwidth("master", "worker-1") == 100.0
+
+
+def test_bandwidth_is_directional(topology):
+    topology.record_bandwidth("master", "worker-1", 100.0)
+    assert topology.bandwidth("worker-1", "master") is None
+
+
+def test_bandwidth_samples_smooth_via_ewma(topology):
+    # smoothing=0.5 (the fixture): each sample pulls the estimate halfway.
+    topology.record_bandwidth("master", "worker-1", 100.0)
+    topology.record_bandwidth("master", "worker-1", 300.0)
+    assert topology.bandwidth("master", "worker-1") == pytest.approx(200.0)
+
+
+def test_bandwidth_rejects_non_positive(topology):
+    with pytest.raises(ValueError):
+        topology.record_bandwidth("master", "worker-1", 0.0)
+    with pytest.raises(ValueError):
+        topology.record_bandwidth("master", "worker-1", -10.0)
+
+
+def test_stale_bandwidth_ages_out(topology):
+    topology.record_bandwidth("master", "worker-1", 100.0, timestamp=1000.0)
+    assert topology.bandwidth("master", "worker-1", now=1061.0) is None
+
+
+def test_fresh_bandwidth_within_max_age(topology):
+    topology.record_bandwidth("master", "worker-1", 100.0, timestamp=1000.0)
+    assert topology.bandwidth("master", "worker-1", now=1059.0) == 100.0
+
+
+def test_latency_and_bandwidth_are_independent_channels(topology):
+    topology.record_latency("master", "worker-1", 25.0)
+    assert topology.bandwidth("master", "worker-1") is None
+    topology.record_bandwidth("master", "worker-1", 50.0)
+    assert topology.latency("master", "worker-1") == 25.0
+    assert topology.bandwidth("master", "worker-1") == 50.0

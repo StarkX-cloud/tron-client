@@ -132,19 +132,75 @@ def register_worker():
 
 
 _last_measured_latency_ms = None
+_last_measured_bw_down_mbps = None
+_last_measured_bw_up_mbps = None
+
+# How many heartbeats between bandwidth probes. A probe moves ~1.25MB, so
+# doing it every heartbeat would be wasteful; latency needs every-heartbeat
+# sampling, throughput changes far more slowly.
+BANDWIDTH_PROBE_EVERY = int(os.environ.get("TRON_BANDWIDTH_PROBE_EVERY", "15"))
+_PROBE_DOWN_BYTES = 1024 * 1024
+_PROBE_UP_BYTES = 256 * 1024
+
+
+def bandwidth_probe(auth_token):
+    """Measure real throughput to the master: download PROBE_DOWN_BYTES via
+    /probe/blob, upload PROBE_UP_BYTES to /probe/sink, divide bytes by
+    wall-clock seconds. This is a genuine transfer measurement, not the
+    hard-coded network_bandwidth_gbps=1.0 the old registration reported.
+    Feeds tron/spine/topology.py's bandwidth map, which matcher.py and
+    global_brain.py use to keep heavy-input jobs off thin pipes.
+    """
+    global _last_measured_bw_down_mbps, _last_measured_bw_up_mbps
+    try:
+        start = time.time()
+        resp = requests.get(
+            f"{TRON_MASTER_URL}/probe/blob",
+            params={"bytes": _PROBE_DOWN_BYTES},
+            headers={"X-TRON-AUTH": auth_token},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        elapsed = time.time() - start
+        got = len(resp.content)
+        if elapsed > 0 and got > 0:
+            _last_measured_bw_down_mbps = (got * 8.0) / (elapsed * 1_000_000.0)
+    except Exception as exc:
+        print(f"[WORKER] bandwidth down-probe failed: {exc}")
+
+    try:
+        blob = b"\x00" * _PROBE_UP_BYTES
+        start = time.time()
+        resp = requests.post(
+            f"{TRON_MASTER_URL}/probe/sink",
+            headers={"X-TRON-AUTH": auth_token, "Content-Type": "application/octet-stream"},
+            data=blob,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        elapsed = time.time() - start
+        if elapsed > 0:
+            _last_measured_bw_up_mbps = (_PROBE_UP_BYTES * 8.0) / (elapsed * 1_000_000.0)
+    except Exception as exc:
+        print(f"[WORKER] bandwidth up-probe failed: {exc}")
 
 
 def heartbeat(auth_token):
     """Send a heartbeat, and report the round-trip time of the *previous*
-    heartbeat call so the master can build up a real (not simulated)
-    picture of this worker's network distance — see
-    tron/spine/topology.py and tron_runtime/global_brain.py, which uses
-    this to prefer lower-latency workers when scoring job placement.
+    heartbeat call (plus the most recent bandwidth probe, if any) so the
+    master can build up a real (not simulated) picture of this worker's
+    network distance — see tron/spine/topology.py and
+    tron_runtime/global_brain.py, which use this to prefer lower-latency,
+    fatter-pipe workers when scoring job placement.
     """
     global _last_measured_latency_ms
     payload = {"worker_name": WORKER_NAME, "active_job_id": None}
     if _last_measured_latency_ms is not None:
         payload["latency_ms"] = _last_measured_latency_ms
+    if _last_measured_bw_down_mbps is not None:
+        payload["bandwidth_mbps_down"] = _last_measured_bw_down_mbps
+    if _last_measured_bw_up_mbps is not None:
+        payload["bandwidth_mbps_up"] = _last_measured_bw_up_mbps
 
     start = time.time()
     try:
@@ -201,6 +257,7 @@ def main():
         auth_token = register_worker()
 
     print(f"[WORKER] Starting polling loop for jobs on {TRON_MASTER_URL}")
+    idle_ticks = 0
     while True:
         try:
             job = fetch_next_job(auth_token)
@@ -210,6 +267,9 @@ def main():
                 result = execute_job(job)
                 report_complete(auth_token, job_id, result, max(0.1, time.time() - start))
             else:
+                if idle_ticks % BANDWIDTH_PROBE_EVERY == 0:
+                    bandwidth_probe(auth_token)
+                idle_ticks += 1
                 heartbeat(auth_token)
                 time.sleep(1)
         except KeyboardInterrupt:

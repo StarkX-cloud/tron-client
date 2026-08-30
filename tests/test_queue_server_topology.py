@@ -135,6 +135,75 @@ def test_match_cycle_ignores_idle_workers_with_stale_heartbeats(client):
     assert set(qs.pending_assignment.keys()) == {"live-worker"}
 
 
+def test_probe_blob_returns_requested_size_capped(client):
+    tc, qs = client
+    resp = tc.get("/probe/blob", params={"bytes": 4096})
+    assert resp.status_code == 200
+    assert len(resp.content) == 4096
+
+    # Over the cap: clamped, not honored, and not an error.
+    resp = tc.get("/probe/blob", params={"bytes": qs.PROBE_MAX_BYTES * 4})
+    assert resp.status_code == 200
+    assert len(resp.content) == qs.PROBE_MAX_BYTES
+
+
+def test_probe_sink_reports_bytes_received(client):
+    tc, _ = client
+    resp = tc.post("/probe/sink", content=b"\x00" * 5000)
+    assert resp.status_code == 200
+    assert resp.json()["received_bytes"] == 5000
+
+
+def test_heartbeat_bandwidth_is_recorded_in_topology_and_worker(client):
+    tc, qs = client
+    _register(tc, "worker-a")
+
+    resp = tc.post(
+        "/heartbeat/worker-a",
+        json={
+            "worker_name": "worker-a",
+            "latency_ms": 20.0,
+            "bandwidth_mbps_down": 75.0,
+            "bandwidth_mbps_up": 30.0,
+        },
+    )
+    assert resp.status_code == 200
+    assert qs.topology.bandwidth("master", "worker-a") == 75.0
+    assert qs.workers["worker-a"]["bandwidth_mbps_down"] == 75.0
+    assert qs.workers["worker-a"]["bandwidth_mbps_up"] == 30.0
+
+
+def test_nonpositive_bandwidth_is_ignored_not_recorded(client):
+    tc, qs = client
+    _register(tc, "worker-a")
+    tc.post(
+        "/heartbeat/worker-a",
+        json={"worker_name": "worker-a", "bandwidth_mbps_down": 0.0},
+    )
+    assert qs.topology.bandwidth("master", "worker-a") is None
+
+
+def test_bandwidth_changes_which_worker_a_heavy_transfer_job_matches_to(client):
+    """End-to-end through the real server: two idle workers, equal latency,
+    different measured bandwidth; a job that declares a large transfer_bytes
+    is matched to the fatter pipe by the periodic match cycle.
+    """
+    tc, qs = client
+    _register(tc, "fat")
+    _register(tc, "thin")
+
+    for name, bw in (("fat", 100.0), ("thin", 8.0)):
+        tc.post(
+            f"/heartbeat/{name}",
+            json={"worker_name": name, "latency_ms": 15.0, "bandwidth_mbps_down": bw},
+        )
+
+    tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 60_000_000})
+    qs._run_match_cycle()
+
+    assert set(qs.pending_assignment.keys()) == {"fat"}
+
+
 def test_spine_events_recorded_for_submitted_job(client):
     tc, qs = client
     submit_resp = tc.post("/submit", json={"function": "dummy-fn-payload"})

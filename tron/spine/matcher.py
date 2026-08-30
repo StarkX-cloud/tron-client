@@ -40,6 +40,33 @@ from .topology import TopologyMap
 # because linear_sum_assignment requires a finite cost matrix.
 INFEASIBLE_SCORE = -1e9
 
+# How many score points one second of estimated input-transfer time costs.
+# The latency penalty is `(latency_ms / 100) * weight`, i.e. ~1 point per
+# 100ms on a unit-weight job; this keeps the bandwidth term on a
+# comparable scale — a job whose inputs take ~1s to ship over the measured
+# link is docked ~1 point, same order as a 100ms-per-unit-weight RTT hit.
+BANDWIDTH_PENALTY_WEIGHT = 1.0
+
+
+def _transfer_penalty(job: dict, worker_name: str, topology: TopologyMap, master_node: str) -> float:
+    """Estimated cost, in score points, of shipping this job's inputs to
+    `worker_name` over the master->worker link. Zero — no effect on the
+    assignment — unless the job actually declares `transfer_bytes` AND the
+    link's throughput has been measured. That "zero unless both known"
+    property is deliberate: it means adding this term can never perturb a
+    placement decision that was made before any bandwidth data existed
+    (every pre-bandwidth test still holds), only sharpen one once real
+    numbers are in.
+    """
+    transfer_bytes = float(job.get("transfer_bytes", 0) or 0)
+    if transfer_bytes <= 0:
+        return 0.0
+    mbps = topology.bandwidth(master_node, worker_name)
+    if not mbps:
+        return 0.0
+    transfer_seconds = (transfer_bytes * 8.0) / (mbps * 1_000_000.0)
+    return transfer_seconds * BANDWIDTH_PENALTY_WEIGHT
+
 
 def score_pair(
     job: dict,
@@ -50,7 +77,12 @@ def score_pair(
 ) -> float:
     """Same scoring logic as GlobalDecisionBrain.decide, exposed standalone
     so the matcher can build a full cost matrix without going through the
-    per-worker /next_job code path."""
+    per-worker /next_job code path.
+
+    score = priority
+            - (latency_ms / 100) * compute_weight        # RTT cost, per Phase 2a
+            - transfer_seconds * BANDWIDTH_PENALTY_WEIGHT # input-shipping cost, Phase 2c
+    """
     if job.get("gpu") and not worker.get("gpu"):
         return INFEASIBLE_SCORE
 
@@ -58,7 +90,8 @@ def score_pair(
     weight = float(job.get("compute_weight", job.get("memory_gb", 1)))
     latency_ms = topology.latency(master_node, worker_name)
     penalty = 0.0 if latency_ms is None else (latency_ms / 100.0) * weight
-    return priority - penalty
+    bandwidth_penalty = _transfer_penalty(job, worker_name, topology, master_node)
+    return priority - penalty - bandwidth_penalty
 
 
 def match_jobs_to_workers(

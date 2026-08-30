@@ -47,13 +47,17 @@ watchdog in `queue_server.py` now recovers dead workers' in-flight tasks via
 `recover_orphaned_tasks` instead of trusting in-memory state alone.
 
 **Phase 2 — Heterogeneous fault-tolerant fabric.** Partially built.
-`tron/spine/topology.py`'s `TopologyMap` records real, worker-self-reported
-heartbeat round-trip latency (EWMA-smoothed, ages out on silence).
+`tron/spine/topology.py`'s `TopologyMap` records two real, worker-self-
+reported network signals, both EWMA-smoothed and aged out on silence:
+heartbeat round-trip **latency**, and **bandwidth** (Phase 2c) — actual
+throughput the worker measures by transferring a payload to and from the
+master via `/probe/blob` and `/probe/sink`, not a hard-coded constant.
 `tron_runtime/global_brain.py` is no longer a stub — it scores placement
-from that measured latency. The other 11 stub modules that queue_server.py
-instantiated but never called (`market_engine.py`, `auto_scaler.py`,
-`predictor_engine.py`, etc.) have been deleted rather than filled in — they
-had no concrete role.
+from measured latency plus, when a job declares `transfer_bytes`, the
+estimated time to ship those bytes over the measured link. The other 11
+stub modules that queue_server.py instantiated but never called
+(`market_engine.py`, `auto_scaler.py`, `predictor_engine.py`, etc.) have
+been deleted rather than filled in — they had no concrete role.
 
 That per-worker-argmax limitation is now actually solved, not just
 mitigated: `tron/spine/matcher.py` runs a periodic master-side match step
@@ -130,6 +134,8 @@ the mercy of a CDN's availability) that fetches `/workers` and
   placement — not a layout algorithm's guess. Worker height = reported
   load. Unmeasured workers sit at a fixed mid-distance (same "don't
   assume unknown is best or worst" rule as `TopologyMap.rank_nodes`).
+  (Measured bandwidth is now available per worker too — Phase 2c — but
+  the Grid does not yet render it as link thickness.)
 - Tasks positioned at whichever worker the event log says they're
   actually assigned to, colored by status (queued/running/completed/
   failed/requeued).
