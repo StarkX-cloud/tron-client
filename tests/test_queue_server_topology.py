@@ -204,6 +204,56 @@ def test_bandwidth_changes_which_worker_a_heavy_transfer_job_matches_to(client):
     assert set(qs.pending_assignment.keys()) == {"fat"}
 
 
+def test_match_cycle_holds_a_transfer_when_the_worker_link_is_saturated(client):
+    """End-to-end: a thin-pipe worker that just received a big transfer
+    doesn't get handed the next one until its link-cooldown window
+    clears. A small transfer still gets through in the meantime.
+    """
+    tc, qs = client
+    _register(tc, "slow")
+    # widen the cooldown window so wall-clock test time can't age the
+    # first reservation out mid-test; 8 Mbps * 30s / 8 = 30 MB budget
+    qs.load_shaper.window_seconds = 30.0
+    tc.post("/heartbeat/slow", json={"worker_name": "slow", "latency_ms": 10.0, "bandwidth_mbps_down": 8.0})
+
+    r1 = tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 29_000_000})
+    job1_id = r1.json()["job_id"]
+    qs._run_match_cycle()
+    assert set(qs.pending_assignment.keys()) == {"slow"}
+
+    tc.get("/next_job/slow")                 # claim it (reserves 29 MB on the link)
+    tc.post(f"/complete/{job1_id}", json={"result": {}})   # done — but the link is still cooling
+    tc.post("/heartbeat/slow", json={"worker_name": "slow", "latency_ms": 10.0, "bandwidth_mbps_down": 8.0})
+
+    # a second big transfer: 29 + 2 > 30 MB budget -> held
+    tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 2_000_000})
+    qs._run_match_cycle()
+    assert qs.pending_assignment == {}
+    assert len(qs.job_queue) == 1
+
+    # a small transfer still fits (29 + 0.5 <= 30) -> assigned
+    tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 500_000})
+    qs._run_match_cycle()
+    assert set(qs.pending_assignment.keys()) == {"slow"}
+
+
+def test_dead_worker_requeue_frees_the_load_shaper_budget(client):
+    """When a job is re-derived elsewhere because its worker died, the
+    bytes it was 'transferring' provably never landed — the shaper must
+    forget them so a live worker isn't also blocked."""
+    tc, qs = client
+    _register(tc, "slow")
+    tc.post("/heartbeat/slow", json={"worker_name": "slow", "bandwidth_mbps_down": 8.0})
+    r = tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 1_900_000})
+    job_id = r.json()["job_id"]
+    qs._run_match_cycle()
+    tc.get("/next_job/slow")
+    assert qs.load_shaper.inflight_bytes("slow") > 0
+
+    qs.load_shaper.release(job_id)
+    assert qs.load_shaper.inflight_bytes("slow") == 0
+
+
 def test_spine_events_recorded_for_submitted_job(client):
     tc, qs = client
     submit_resp = tc.post("/submit", json={"function": "dummy-fn-payload"})

@@ -222,7 +222,10 @@ The repo previously carried, in parallel with the above:
   constant and were not imported by anything — dead weight, not
   architecture. The *active* stub layer, `tron_runtime/`, is kept because
   `queue_server.py` genuinely imports it; it is Phase 2's job to make it
-  real rather than delete it out from under the server.
+  real rather than delete it out from under the server. Status:
+  `global_brain.py` (Phase 2a) and `load_shaper.py` (Phase 2c — a
+  bandwidth-driven per-worker link-cooldown budget) are now real;
+  `load_shaper.shape()`, which nothing called, was deleted.
 - **~25 status/marketing markdown files** (`PRODUCTION_READY.md`,
   `LAUNCH_READY.md`, `VALIDATION_COMPLETE.md`, `YOUR_GOAL_ACHIEVED.md`, and
   others) claiming a production-ready state the code didn't support —

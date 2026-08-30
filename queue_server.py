@@ -676,6 +676,9 @@ def _claim_job(worker_name: str, job: dict) -> str:
         "start_time": time.time(),
         "job": job,
     }
+    # Phase 2c/load-shaper: this job's inputs are now on the wire to this
+    # worker. Idempotent with any reservation _run_match_cycle already made.
+    load_shaper.reserve(worker_name, job_id, job.get("transfer_bytes", 0))
     return job_id
 
 
@@ -709,7 +712,7 @@ def next_job(worker_name: str):
 
             worker = workers[worker_name]
             scale_state = swarm.should_scale(len(job_queue))
-            shaped = load_shaper.reshape(job_queue, workers)
+            shaped = load_shaper.reshape(job_queue, workers, topology)
 
             best_job = None
             best_index = None
@@ -808,6 +811,10 @@ def complete(job_id: str, result: dict):
 
             del running_jobs[job_id]
 
+    # NB: deliberately no load_shaper.release() here — the window is a
+    # link cooldown that ages out on its own, not tied to job completion
+    # (see tron_runtime/load_shaper.py).
+
     emit(job_id, "completed", {
         "runtime": runtime,
         "output_hash": output_artifact.artifact_id,
@@ -865,8 +872,16 @@ def _run_match_cycle():
             index = next((i for i, j in enumerate(job_queue) if j["id"] == job_id), None)
             if index is None:
                 continue  # already claimed by a worker's own /next_job call in the meantime
-            job = job_queue.pop(index)
+            job = job_queue[index]
+            # load-shaper: don't pile a transfer onto a worker whose
+            # measured downlink is already saturated this window — leave
+            # the job queued for a later cycle. No-op when bandwidth is
+            # unmeasured or the job declares no transfer_bytes.
+            if not load_shaper.can_accept(worker_name, job.get("transfer_bytes", 0), topology):
+                continue
+            job_queue.pop(index)
             pending_assignment[worker_name] = job
+            load_shaper.reserve(worker_name, job_id, job.get("transfer_bytes", 0))
 
 
 def _match_loop():
@@ -905,6 +920,9 @@ def _watchdog_loop():
                         job_store[job_id]["status"] = "queued"
                     if running is not None:
                         job_queue.append(running["job"])
+                # dead worker — its in-flight transfer isn't happening;
+                # free the window budget so a live worker can take the job.
+                load_shaper.release(job_id)
                 event_log.append(job_id, "requeued", {"reason": "node_timeout", "dead_node": worker_name})
             with lock:
                 if worker_name in workers:
