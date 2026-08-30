@@ -100,6 +100,25 @@ model (bit-for-bit identical to the uninstrumented run).
 `POST /training/run_demo` triggers it against `queue_server.py`'s own
 spine — verified live, including in the Grid (see Phase 4 below).
 
+**Phase 3 scale-up — the same story on a real pretrained model.**
+`tron/training/lora_demo.py` / `benchmark_lora.py` run the identical
+local-SGD and merging comparison against EleutherAI's Pythia-70M via
+LoRA, fine-tuned on the tiny-shakespeare corpus, instead of the
+hand-rolled numpy MLP. This is what makes the "low-rank delta, not a
+full checkpoint, is the unit of communication" idea from the project's
+original brief concrete rather than conceptual: the LoRA adapter is
+393,216 bytes against the full model's 282,099,712 — 717x smaller — and
+local SGD trains on top of that with eval loss genuinely dropping
+(4.3296 -> 4.2236) across 4 syncs. Zero-communication merging recovers
+most of that gain (merged 4.2403 vs. 4.3226 average for an unmerged solo
+shard) with no communication during training at all. Numbers are from
+one recorded real run, not simulated — see ROADMAP.md for the full
+figures and the honest cost: a run takes ~20 minutes on this project's
+CPU-only dev hardware, so the pytest suite covers the pure logic
+(shard splitting, byte accounting, adapter averaging) fast and without
+a network dependency, rather than re-running the full pipeline on every
+test invocation. Optional dependency group: `requirements-training.txt`.
+
 **Phase 4 — The 3D Grid (v1: passive replay).** Built: `tron/grid/index.html`,
 served by `queue_server.py` at `/grid/`. It's a static page (three.js,
 vendored locally — not a CDN reference, so it works offline and isn't at

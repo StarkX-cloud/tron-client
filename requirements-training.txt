@@ -1,0 +1,11 @@
+# Optional, heavier dependencies for the Phase 3 scale-up demo
+# (tron/training/lora_demo.py, benchmark_lora.py) — a real pretrained
+# model via LoRA, not the base numpy demo (local_sgd.py, merge.py,
+# benchmark.py), which has no dependency beyond numpy/scipy.
+#
+# NOT required to run queue_server.py or the core test suite.
+torch
+transformers
+peft
+accelerate
+safetensors
