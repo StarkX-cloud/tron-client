@@ -56,7 +56,7 @@ from tron_runtime.global_brain import GlobalDecisionBrain
 # =========================
 # EXECUTION SPINE (Phase 1 + Phase 2)
 # =========================
-from tron.spine import EventLog, ArtifactStore, Task, content_hash, TopologyMap
+from tron.spine import EventLog, ArtifactStore, Task, content_hash, TopologyMap, match_jobs_to_workers
 
 # =========================
 # ORCHESTRATOR & GPU IMPORTS
@@ -147,9 +147,17 @@ job_store = {}
 workers = {}
 running_jobs = {}
 
+# Phase 2b: jobs the periodic match step (see _match_loop) has already
+# decided a specific worker should get, ahead of that worker's next poll.
+# This is what makes cross-worker arbitration real — see
+# tron/spine/matcher.py for why /next_job's own per-worker loop alone
+# can't do this.
+pending_assignment = {}
+
 event_bus = defaultdict(list)
 
 HEARTBEAT_TIMEOUT_SECONDS = 20.0
+MATCH_INTERVAL_SECONDS = 1.0
 
 # =========================
 # EMIT
@@ -408,85 +416,105 @@ def spine_task(job_id: str):
 # NEXT JOB (scheduling)
 # =========================
 
+def _claim_job(worker_name: str, job: dict) -> str:
+    """Shared bookkeeping once a specific job has been chosen for a
+    specific worker — caller must already hold `lock`. Returns job_id."""
+    job_id = job["id"]
+    job_store[job_id]["status"] = "running"
+    workers[worker_name]["status"] = "busy"
+    workers[worker_name]["load"] += job.get("memory_gb", 1)
+    running_jobs[job_id] = {
+        "worker": worker_name,
+        "start_time": time.time(),
+        "job": job,
+    }
+    return job_id
+
+
 @app.get("/next_job/{worker_name}")
 def next_job(worker_name: str):
+
+    claimed_job = None
+    scale_state = None
+    best_score = None
 
     with lock:
 
         if worker_name not in workers:
             return {"job": None}
 
-        if not job_queue:
-            return {"job": None}
+        # Phase 2b: if the periodic match step (tron/spine/matcher.py)
+        # already decided this worker should get a specific job — having
+        # considered it against every other idle worker and every queued
+        # job at once — honor that instead of re-deciding locally. This
+        # is the actual fix for the limitation Phase 2a documented:
+        # per-worker argmax alone can never compare two workers' scores
+        # for the same job, because each worker's /next_job call only
+        # ever sees its own queue view.
+        matched = pending_assignment.pop(worker_name, None)
+        if matched is not None:
+            claimed_job = matched
+            job_id = _claim_job(worker_name, claimed_job)
+        else:
+            if not job_queue:
+                return {"job": None}
 
-        worker = workers[worker_name]
+            worker = workers[worker_name]
+            scale_state = swarm.should_scale(len(job_queue))
+            shaped = load_shaper.reshape(job_queue, workers)
 
-        scale_state = swarm.should_scale(len(job_queue))
+            best_job = None
+            best_index = None
+            best_score = -999
 
-        shaped = load_shaper.reshape(job_queue, workers)
+            for i, entry in enumerate(shaped):
 
-        best_job = None
-        best_index = None
-        best_score = -999
+                job = entry["job"]
 
-        for i, entry in enumerate(shaped):
+                if entry.get("delay") == 1:
+                    continue
 
-            job = entry["job"]
+                try:
+                    decision = global_brain.decide(job_queue, workers, job, worker_name=worker_name)
+                    score = decision.get("score", 0)
+                except Exception:
+                    score = job.get("priority", 1)
 
-            if entry.get("delay") == 1:
-                continue
+                if scale_state == "SCALE_UP":
+                    score += 2
+                elif scale_state == "SCALE_DOWN":
+                    score -= 0.5
 
-            try:
-                decision = global_brain.decide(job_queue, workers, job, worker_name=worker_name)
-                score = decision.get("score", 0)
-            except Exception:
-                score = job.get("priority", 1)
+                gpu_bonus = 1.5 if worker.get("gpu") else 1.0
+                memory_factor = max(0.5, 1.0 - worker.get("load", 0) * 0.1)
 
-            if scale_state == "SCALE_UP":
-                score += 2
-            elif scale_state == "SCALE_DOWN":
-                score -= 0.5
+                score *= gpu_bonus * memory_factor
+                score -= job.get("memory_gb", 1) * 0.2
 
-            gpu_bonus = 1.5 if worker.get("gpu") else 1.0
-            memory_factor = max(0.5, 1.0 - worker.get("load", 0) * 0.1)
+                if score > best_score:
+                    best_score = score
+                    best_job = job
+                    best_index = i
 
-            score *= gpu_bonus * memory_factor
-            score -= job.get("memory_gb", 1) * 0.2
+            if best_job is None:
+                return {"job": None}
 
-            if score > best_score:
-                best_score = score
-                best_job = job
-                best_index = i
-
-        if best_job is None:
-            return {"job": None}
-
-        job_queue.pop(best_index)
-
-        job_id = best_job["id"]
-
-        job_store[job_id]["status"] = "running"
-
-        workers[worker_name]["status"] = "busy"
-        workers[worker_name]["load"] += best_job.get("memory_gb", 1)
-
-        running_jobs[job_id] = {
-            "worker": worker_name,
-            "start_time": time.time(),
-            "job": best_job
-        }
+            job_queue.pop(best_index)
+            claimed_job = best_job
+            job_id = _claim_job(worker_name, claimed_job)
 
     event_log.append(job_id, "assigned", {"node_id": worker_name})
     emit(job_id, "started", {
         "worker": worker_name,
-        "task_type": best_job.get("task_type"),
+        "task_type": claimed_job.get("task_type"),
         "swarm_state": scale_state,
-        "score": best_score
+        "score": best_score,
+        "source": "matched" if scale_state is None else "local",
     })
 
     return {
-        "job": best_job,
-        "swarm_state": scale_state
+        "job": claimed_job,
+        "swarm_state": scale_state,
     }
 
 # =========================
@@ -547,6 +575,44 @@ def complete_job(payload: dict):
     if not job_id:
         return {"ok": False, "error": "missing job_id"}
     return complete(job_id, result)
+
+# =========================
+# MATCH LOOP (Phase 2b): periodic global assignment
+# =========================
+
+def _run_match_cycle():
+    """One pass of the match step — separated from _match_loop's sleep
+    loop so it can be invoked directly (tests) as well as periodically
+    (the real server)."""
+    with lock:
+        if not job_queue:
+            return
+        idle_workers = {
+            name: w for name, w in workers.items()
+            if w.get("status") == "idle" and name not in pending_assignment
+        }
+        if not idle_workers:
+            return
+
+        assignments = match_jobs_to_workers(list(job_queue), idle_workers, topology)
+        for job_id, worker_name in assignments:
+            index = next((i for i, j in enumerate(job_queue) if j["id"] == job_id), None)
+            if index is None:
+                continue  # already claimed by a worker's own /next_job call in the meantime
+            job = job_queue.pop(index)
+            pending_assignment[worker_name] = job
+
+
+def _match_loop():
+    """Run _run_match_cycle on a fixed interval. Anything it decides is
+    placed in `pending_assignment` and served the next time that worker
+    calls /next_job — see the comment there for why this exists
+    (per-worker argmax alone can't do cross-worker arbitration).
+    """
+    while True:
+        time.sleep(MATCH_INTERVAL_SECONDS)
+        _run_match_cycle()
+
 
 # =========================
 # WATCHDOG: recover work from dead workers via the spine
@@ -639,6 +705,8 @@ if __name__ == "__main__":
     if _USE_FASTAPI:
         watchdog_thread = threading.Thread(target=_watchdog_loop, daemon=True)
         watchdog_thread.start()
+        match_thread = threading.Thread(target=_match_loop, daemon=True)
+        match_thread.start()
         uvicorn.run(app, host=host, port=port, reload=reload_flag)
     else:
         class _SimpleHandler(http.server.BaseHTTPRequestHandler):

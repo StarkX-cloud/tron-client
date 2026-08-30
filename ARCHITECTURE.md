@@ -55,17 +55,21 @@ instantiated but never called (`market_engine.py`, `auto_scaler.py`,
 `predictor_engine.py`, etc.) have been deleted rather than filled in — they
 had no concrete role.
 
-What's *not* solved: `/next_job` is worker-pull (a worker asks for its best
-job; the master answers from that worker's queue view alone), so there is
-no point where two workers' scores for the same job are ever compared — a
-latency penalty that's constant across every job in one call cannot change
-which job wins argmax, full stop. The current mitigation scales the penalty
-by the job's `compute_weight` (a slow-link worker is steered toward light
-jobs, which is real and tested — see `tests/test_queue_server_topology.py`)
-but that is not the same as "the closest worker gets the job." Actually
-solving that needs a master-side match step run periodically over all idle
-workers and all queued jobs at once — an assignment problem, not N
-independent per-worker argmax calls. That's Phase 2b; see ROADMAP.md.
+That per-worker-argmax limitation is now actually solved, not just
+mitigated: `tron/spine/matcher.py` runs a periodic master-side match step
+(`_match_loop` in `queue_server.py`, every `MATCH_INTERVAL_SECONDS`) that
+builds the full (job × idle-worker) score matrix and solves it with
+`scipy.optimize.linear_sum_assignment` — true optimal assignment, not a
+greedy "take the best pair first" heuristic. Greedy was tried first during
+development and is provably wrong here: given two workers of very
+different latency and two jobs of very different weight, greedy grabs the
+single best-looking pair immediately and can strand the other pair far
+worse off than the globally optimal pairing (worked numeric example in
+`matcher.py`'s docstring; `test_optimal_assignment_beats_the_greedy_trap`
+pins the correct behavior down). Results are placed in
+`pending_assignment` and `/next_job` serves from there first — the
+per-worker argmax loop is now purely a fallback for jobs the match cycle
+hasn't reached yet, not the primary placement mechanism.
 
 **Phase 3 — Distributed training demo.** Not started. The actual
 "get noticed" artifact: DiLoCo-style local SGD (hundreds of local steps

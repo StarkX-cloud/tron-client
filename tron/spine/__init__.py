@@ -16,6 +16,7 @@ from .model import Artifact, Event, Task, TaskStatus, content_hash
 from .store import ArtifactStore
 from .log import EventLog
 from .topology import TopologyMap
+from .matcher import match_jobs_to_workers, score_pair
 
 __all__ = [
     "Artifact",
@@ -26,4 +27,6 @@ __all__ = [
     "ArtifactStore",
     "EventLog",
     "TopologyMap",
+    "match_jobs_to_workers",
+    "score_pair",
 ]

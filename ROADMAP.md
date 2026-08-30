@@ -27,12 +27,19 @@ technical design behind each phase.
     steered toward light jobs and away from heavy ones — a real,
     testable effect (see `tests/test_queue_server_topology.py`), but it
     is *not* the same thing as "the closest worker gets the job."
-- [ ] **Phase 2b — Cross-worker arbitration.** The actual fix for the
-      limit above: replace (or supplement) worker-pull with a periodic
-      master-side match step that considers all idle workers against all
-      queued jobs at once — an assignment problem, not N independent
-      per-worker argmax calls. This is the real "placement" Phase 2 was
-      meant to deliver; 2a is a partial, honestly-scoped step toward it.
+- [x] **Phase 2b — Cross-worker arbitration.** `tron/spine/matcher.py`:
+      a periodic (`MATCH_INTERVAL_SECONDS`, default 1s) master-side match
+      step using `scipy.optimize.linear_sum_assignment` — the real
+      Hungarian algorithm, not a greedy heuristic (a greedy "take the
+      best pair first" approach is provably suboptimal here; see the
+      worked example in matcher.py's docstring and
+      `test_optimal_assignment_beats_the_greedy_trap`). Results land in
+      `pending_assignment`; `/next_job` serves from there first, falling
+      back to its own per-worker argmax only for jobs the match cycle
+      hasn't reached yet. 10 tests in `tests/test_matcher.py`, 2
+      end-to-end in `tests/test_queue_server_topology.py` proving the
+      exact cross-worker case Phase 2a's per-worker scoring alone
+      couldn't solve. New runtime dependency: `scipy`.
 - [ ] Either implement or delete `tron_runtime/load_shaper.py`'s
       `reshape()`, which today is a pass-through (`delay: 0` for every
       job) — same "no module ships as an empty interface" rule.

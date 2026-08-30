@@ -66,6 +66,45 @@ def test_high_latency_worker_is_routed_the_lighter_of_two_queued_jobs(client):
     assert job["function"] == "light-fn"
 
 
+def test_match_cycle_solves_the_cross_worker_case_next_job_alone_cannot(client):
+    """This is the actual fix for Phase 2a's documented limitation: two
+    workers, two jobs of very different weight — the match step (which
+    sees both workers and both jobs at once) should place the heavy job
+    on the low-latency worker and the light job on the high-latency one,
+    which per-worker /next_job calls alone are structurally unable to do
+    (see tron_runtime/global_brain.py's decide() docstring).
+    """
+    tc, qs = client
+    _register(tc, "near")
+    _register(tc, "far")
+    tc.post("/heartbeat/near", json={"worker_name": "near", "latency_ms": 5.0})
+    tc.post("/heartbeat/far", json={"worker_name": "far", "latency_ms": 300.0})
+
+    tc.post("/submit", json={"function": "heavy-fn", "priority": 5, "compute_weight": 20})
+    tc.post("/submit", json={"function": "light-fn", "priority": 5, "compute_weight": 1})
+
+    qs._run_match_cycle()
+
+    assert qs.pending_assignment["near"]["function"] == "heavy-fn"
+    assert qs.pending_assignment["far"]["function"] == "light-fn"
+
+    # Whichever worker polls next gets exactly its matched job, not
+    # whatever its own local queue view would have argmax'd to.
+    near_job = tc.get("/next_job/near").json()["job"]
+    assert near_job["function"] == "heavy-fn"
+
+
+def test_match_cycle_is_a_noop_with_no_idle_workers(client):
+    tc, qs = client
+    _register(tc, "worker-1")
+    qs.workers["worker-1"]["status"] = "busy"
+
+    tc.post("/submit", json={"function": "fn"})
+    qs._run_match_cycle()
+
+    assert qs.pending_assignment == {}
+
+
 def test_spine_events_recorded_for_submitted_job(client):
     tc, qs = client
     submit_resp = tc.post("/submit", json={"function": "dummy-fn-payload"})
