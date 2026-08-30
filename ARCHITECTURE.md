@@ -71,13 +71,27 @@ pins the correct behavior down). Results are placed in
 per-worker argmax loop is now purely a fallback for jobs the match cycle
 hasn't reached yet, not the primary placement mechanism.
 
-**Phase 3 — Distributed training demo.** Not started. The actual
-"get noticed" artifact: DiLoCo-style local SGD (hundreds of local steps
-between syncs) plus weight-space merging (TIES/task arithmetic) as the
-zero-communication fallback, training or fine-tuning a real model across
-heterogeneous nodes. Deliverable is one benchmarked number — communication
-bytes and wall-clock vs. naive all-reduce on the same hardware — with a
-reproducible repo, not a platform claim.
+**Phase 3 — Distributed training demo.** Built at small scale in
+`tron/training/`: a hand-written numpy MLP (backprop correctness verified
+against numerical gradients — see `tests/test_training_model.py`),
+non-IID sharded synthetic data, DiLoCo-style local SGD vs. a
+sync-every-step baseline, and weight-space merging (task arithmetic +
+TIES). Run `python -m tron.training.benchmark` for the report. On a
+deliberately hard (not cherry-picked) non-IID split: local SGD gets 10x
+less communication than the baseline for 1.6 points less accuracy;
+merging with zero communication during training recovers 81% accuracy
+vs. 58.8% for an unmerged solo shard. Every number is pinned as a
+regression test.
+
+This is honestly small: a few hundred parameters, synthetic data,
+seconds of CPU time, all "shards" as in-process objects on one machine
+(communication bytes are counted correctly but nothing is actually sent
+over a wire yet). The goal at this stage was to get the algorithms
+right and prove it, not to demonstrate scale — training across real
+separate machines over an actual network, and scaling to a model size
+anyone would call "real," is substantial, distinct future work. See
+ROADMAP.md for what's left, including the public writeup this phase was
+originally scoped to produce.
 
 **Phase 4 — The 3D Grid.** Not started, and deliberately last. A renderer
 over `EventLog.replay()` / `snapshot()`: node distance from measured

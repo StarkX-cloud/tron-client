@@ -43,15 +43,36 @@ technical design behind each phase.
 - [ ] Either implement or delete `tron_runtime/load_shaper.py`'s
       `reshape()`, which today is a pass-through (`delay: 0` for every
       job) — same "no module ships as an empty interface" rule.
-- [ ] **Phase 3 — Distributed training demo.**
-  - [ ] DiLoCo-style local SGD (local steps between infrequent outer sync).
-  - [ ] Weight-space merging (TIES / task arithmetic) as the
-        zero-communication path.
-  - [ ] Run across genuinely heterogeneous nodes (not all-identical
-        hardware) and publish one number: communication bytes + wall-clock
-        vs. a naive all-reduce baseline on the same hardware.
-  - [ ] Reproducible standalone repo + writeup — this is the artifact meant
-        to get attention, not the platform as a whole.
+- [x] **Phase 3 — Distributed training demo (small-scale, real).**
+      `tron/training/`: a hand-written numpy MLP (backprop verified
+      against numerical gradients, `tests/test_training_model.py`),
+      synthetic non-IID sharded data (`data.py`), DiLoCo-style local SGD
+      vs. a sync-every-step baseline (`local_sgd.py`), and weight-space
+      merging via task arithmetic + TIES (`merge.py`). Run
+      `python -m tron.training.benchmark` for the report. Locked,
+      reproducible numbers on the benchmark's fixed problem (class_sep=1.0,
+      skew=0.95 — deliberately hard, not cherry-picked):
+      - Local SGD: **10x less communication** than sync-every-step
+        (135,680 vs. 1,356,800 bytes) for **1.6 points less accuracy**
+        (85.6% vs. 87.2%).
+      - Merging: **zero communication during training** recovers 81.0%
+        accuracy (TIES: 81.6%) vs. 58.8% average for an unmerged solo
+        shard — each shard only ever saw ~95% one class.
+      - All numbers pinned as regression tests in `tests/test_local_sgd.py`
+        and `tests/test_training_merge.py`.
+  - **What this does not claim:** this is a few-hundred-parameter model
+    on synthetic data run in seconds on one CPU core, not a
+    frontier-scale training run across real heterogeneous machines. The
+    goal was to implement and verify the *algorithms* correctly at a
+    size anyone can rerun and check in seconds — scaling to a real model
+    size and an actual multi-machine network is substantial future work,
+    not a claim this phase makes.
+  - [ ] Not yet done: running this across genuinely separate physical
+        machines over a real network (today all "shards" are in-process
+        Python objects on one machine — communication bytes are counted,
+        not actually transmitted over a wire yet).
+  - [ ] Not yet done: a public writeup / standalone repo extraction — see
+        the "getting noticed" discussion this phase was scoped around.
 - [ ] **Phase 4 — The 3D Grid.**
   - [ ] Passive replay view over `EventLog.replay()` — node distance from
         measured topology, pipe width from throughput, node size from load.

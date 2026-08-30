@@ -6,9 +6,10 @@ heterogeneous, unreliable machines with near-zero communication overhead —
 with a live, causal 3D replay of what the cluster is doing.**
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the technical design and
-[ROADMAP.md](ROADMAP.md) for what's built vs. planned. Short version: Phase
-1 (the execution spine) is done and tested; Phases 2–4 (topology-aware
-scheduling, distributed training, the 3D Grid) are not yet built.
+[ROADMAP.md](ROADMAP.md) for what's built vs. planned. Short version:
+Phases 1–3 (execution spine, topology-aware scheduling, a small-scale
+distributed training demo) are built and tested; Phase 4 (the 3D Grid) is
+not yet built.
 
 This is not a rental-compute marketplace — an earlier billing/royalty layer
 explored that idea and has been removed. See ARCHITECTURE.md's "What was
@@ -32,10 +33,19 @@ result = expensive_task(10).get()
   look like a normal function call. Functions are shipped via cloudpickle.
 - **Server** (`queue_server.py`): FastAPI job queue, worker registration
   and heartbeat, a watchdog that recovers a dead worker's in-flight work.
-- **Execution spine** (`tron/spine/`): content-addressed artifacts +
-  append-only replayable event log. Every task lifecycle transition is
-  recorded; `/spine/events` and `/spine/task/{id}` expose the raw log.
-  This is the substrate Phases 2–4 build on. See ARCHITECTURE.md.
+- **Execution spine** (`tron/spine/`): content-addressed artifacts,
+  append-only replayable event log, real latency-aware placement
+  (`topology.py`), and a periodic optimal-assignment match step
+  (`matcher.py`, via `scipy.optimize.linear_sum_assignment`) for actual
+  cross-worker job placement. `/spine/events` and `/spine/task/{id}`
+  expose the raw log — this is the substrate Phase 4's Grid builds on.
+- **Training demo** (`tron/training/`): DiLoCo-style local SGD vs. a
+  sync-every-step baseline, and weight-space merging (task arithmetic +
+  TIES) — the small-scale, benchmarked proof of the "train across
+  unreliable heterogeneous nodes with near-zero communication" claim.
+  Run `python -m tron.training.benchmark` for the report. See
+  ARCHITECTURE.md for the numbers and what's honestly still missing
+  (real multi-machine execution, a larger model).
 - **TRON-II** (`tron/orchestrator/`): training orchestration with
   pluggable adapters (Ray, SB3, scikit-learn, Transformers) and an
   outcome-tracking loop that scores adapters by how close their predicted
