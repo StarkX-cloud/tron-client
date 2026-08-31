@@ -14,3 +14,6 @@ services:
         value: 0.0.0.0
       - key: TRON_RELOAD
         value: false
+      - key: TRON_TRAINING_AUTH_TOKEN
+        sync: false  # set in the Render dashboard, not committed — required
+                     # to lock down /training/session*; unset = open (dev default)

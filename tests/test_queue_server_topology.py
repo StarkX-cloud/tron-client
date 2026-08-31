@@ -27,11 +27,20 @@ def _register(client, name):
     return resp.json()["auth_token"]
 
 
+def _heartbeat(client, name, token, **payload):
+    # /heartbeat is fail-closed once a worker has a token on file (see
+    # queue_server.py) — real callers (worker.py) always send the token
+    # they were issued at registration, so tests do the same here rather
+    # than exercising the (correctly) rejected no-token path.
+    payload.setdefault("worker_name", name)
+    return client.post(f"/heartbeat/{name}", json=payload, headers={"X-TRON-AUTH": token})
+
+
 def test_heartbeat_with_latency_is_recorded_in_topology(client):
     tc, qs = client
-    _register(tc, "worker-a")
+    token = _register(tc, "worker-a")
 
-    resp = tc.post("/heartbeat/worker-a", json={"worker_name": "worker-a", "latency_ms": 42.0})
+    resp = _heartbeat(tc, "worker-a", token, latency_ms=42.0)
     assert resp.status_code == 200
 
     assert qs.topology.latency("master", "worker-a") == 42.0
@@ -39,9 +48,9 @@ def test_heartbeat_with_latency_is_recorded_in_topology(client):
 
 def test_negative_latency_is_ignored_not_recorded(client):
     tc, qs = client
-    _register(tc, "worker-a")
+    token = _register(tc, "worker-a")
 
-    tc.post("/heartbeat/worker-a", json={"worker_name": "worker-a", "latency_ms": -5.0})
+    _heartbeat(tc, "worker-a", token, latency_ms=-5.0)
 
     assert qs.topology.latency("master", "worker-a") is None
 
@@ -58,8 +67,8 @@ def test_high_latency_worker_is_routed_the_lighter_of_two_queued_jobs(client):
     scales with job weight.
     """
     tc, qs = client
-    _register(tc, "far")
-    tc.post("/heartbeat/far", json={"worker_name": "far", "latency_ms": 400.0})
+    token = _register(tc, "far")
+    _heartbeat(tc, "far", token, latency_ms=400.0)
 
     tc.post("/submit", json={"function": "heavy-fn", "priority": 5, "compute_weight": 20, "memory_gb": 1})
     tc.post("/submit", json={"function": "light-fn", "priority": 5, "compute_weight": 1, "memory_gb": 1})
@@ -78,10 +87,10 @@ def test_match_cycle_solves_the_cross_worker_case_next_job_alone_cannot(client):
     (see tron_runtime/global_brain.py's decide() docstring).
     """
     tc, qs = client
-    _register(tc, "near")
-    _register(tc, "far")
-    tc.post("/heartbeat/near", json={"worker_name": "near", "latency_ms": 5.0})
-    tc.post("/heartbeat/far", json={"worker_name": "far", "latency_ms": 300.0})
+    near_token = _register(tc, "near")
+    far_token = _register(tc, "far")
+    _heartbeat(tc, "near", near_token, latency_ms=5.0)
+    _heartbeat(tc, "far", far_token, latency_ms=300.0)
 
     tc.post("/submit", json={"function": "heavy-fn", "priority": 5, "compute_weight": 20})
     tc.post("/submit", json={"function": "light-fn", "priority": 5, "compute_weight": 1})
@@ -121,9 +130,9 @@ def test_match_cycle_ignores_idle_workers_with_stale_heartbeats(client):
     """
     tc, qs = client
     _register(tc, "stale-worker")
-    _register(tc, "live-worker")
+    live_token = _register(tc, "live-worker")
 
-    tc.post("/heartbeat/live-worker", json={"worker_name": "live-worker", "latency_ms": 50.0})
+    _heartbeat(tc, "live-worker", live_token, latency_ms=50.0)
     # stale-worker registered but never heartbeated again — its
     # last_heartbeat is from registration, already "long enough ago" for
     # this test's purposes.
@@ -156,16 +165,11 @@ def test_probe_sink_reports_bytes_received(client):
 
 def test_heartbeat_bandwidth_is_recorded_in_topology_and_worker(client):
     tc, qs = client
-    _register(tc, "worker-a")
+    token = _register(tc, "worker-a")
 
-    resp = tc.post(
-        "/heartbeat/worker-a",
-        json={
-            "worker_name": "worker-a",
-            "latency_ms": 20.0,
-            "bandwidth_mbps_down": 75.0,
-            "bandwidth_mbps_up": 30.0,
-        },
+    resp = _heartbeat(
+        tc, "worker-a", token,
+        latency_ms=20.0, bandwidth_mbps_down=75.0, bandwidth_mbps_up=30.0,
     )
     assert resp.status_code == 200
     assert qs.topology.bandwidth("master", "worker-a") == 75.0
@@ -175,11 +179,8 @@ def test_heartbeat_bandwidth_is_recorded_in_topology_and_worker(client):
 
 def test_nonpositive_bandwidth_is_ignored_not_recorded(client):
     tc, qs = client
-    _register(tc, "worker-a")
-    tc.post(
-        "/heartbeat/worker-a",
-        json={"worker_name": "worker-a", "bandwidth_mbps_down": 0.0},
-    )
+    token = _register(tc, "worker-a")
+    _heartbeat(tc, "worker-a", token, bandwidth_mbps_down=0.0)
     assert qs.topology.bandwidth("master", "worker-a") is None
 
 
@@ -189,14 +190,10 @@ def test_bandwidth_changes_which_worker_a_heavy_transfer_job_matches_to(client):
     is matched to the fatter pipe by the periodic match cycle.
     """
     tc, qs = client
-    _register(tc, "fat")
-    _register(tc, "thin")
+    tokens = {"fat": _register(tc, "fat"), "thin": _register(tc, "thin")}
 
     for name, bw in (("fat", 100.0), ("thin", 8.0)):
-        tc.post(
-            f"/heartbeat/{name}",
-            json={"worker_name": name, "latency_ms": 15.0, "bandwidth_mbps_down": bw},
-        )
+        _heartbeat(tc, name, tokens[name], latency_ms=15.0, bandwidth_mbps_down=bw)
 
     tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 60_000_000})
     qs._run_match_cycle()
@@ -210,11 +207,11 @@ def test_match_cycle_holds_a_transfer_when_the_worker_link_is_saturated(client):
     clears. A small transfer still gets through in the meantime.
     """
     tc, qs = client
-    _register(tc, "slow")
+    token = _register(tc, "slow")
     # widen the cooldown window so wall-clock test time can't age the
     # first reservation out mid-test; 8 Mbps * 30s / 8 = 30 MB budget
     qs.load_shaper.window_seconds = 30.0
-    tc.post("/heartbeat/slow", json={"worker_name": "slow", "latency_ms": 10.0, "bandwidth_mbps_down": 8.0})
+    _heartbeat(tc, "slow", token, latency_ms=10.0, bandwidth_mbps_down=8.0)
 
     r1 = tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 29_000_000})
     job1_id = r1.json()["job_id"]
@@ -223,7 +220,7 @@ def test_match_cycle_holds_a_transfer_when_the_worker_link_is_saturated(client):
 
     tc.get("/next_job/slow")                 # claim it (reserves 29 MB on the link)
     tc.post(f"/complete/{job1_id}", json={"result": {}})   # done — but the link is still cooling
-    tc.post("/heartbeat/slow", json={"worker_name": "slow", "latency_ms": 10.0, "bandwidth_mbps_down": 8.0})
+    _heartbeat(tc, "slow", token, latency_ms=10.0, bandwidth_mbps_down=8.0)
 
     # a second big transfer: 29 + 2 > 30 MB budget -> held
     tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 2_000_000})
@@ -242,8 +239,8 @@ def test_dead_worker_requeue_frees_the_load_shaper_budget(client):
     bytes it was 'transferring' provably never landed — the shaper must
     forget them so a live worker isn't also blocked."""
     tc, qs = client
-    _register(tc, "slow")
-    tc.post("/heartbeat/slow", json={"worker_name": "slow", "bandwidth_mbps_down": 8.0})
+    token = _register(tc, "slow")
+    _heartbeat(tc, "slow", token, bandwidth_mbps_down=8.0)
     r = tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 1_900_000})
     job_id = r.json()["job_id"]
     qs._run_match_cycle()
