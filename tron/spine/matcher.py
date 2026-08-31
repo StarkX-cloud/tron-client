@@ -47,6 +47,30 @@ INFEASIBLE_SCORE = -1e9
 # link is docked ~1 point, same order as a 100ms-per-unit-weight RTT hit.
 BANDWIDTH_PENALTY_WEIGHT = 1.0
 
+# How many score points a node's outcome track record is worth, at most.
+# node_quality() is a 0.0-1.0 success rate; centering it at 0.5 and
+# scaling by this weight gives a node with a perfect record a +0.5 bonus
+# and a node that has only ever failed a -0.5 penalty — comparable to
+# roughly 50ms of latency on a unit-weight job, enough to matter without
+# letting outcome history overwhelm the real, physically-measured
+# latency/bandwidth terms above.
+OUTCOME_QUALITY_WEIGHT = 1.0
+
+
+def _outcome_quality_bonus(worker_name: str, outcome_log) -> float:
+    """Score adjustment from this node's past training outcomes. Zero —
+    no effect on the assignment — unless outcome_log is provided AND the
+    node has actually participated in at least one recorded outcome. Same
+    "zero unless known" contract as _transfer_penalty: adding this term
+    can never perturb a placement decision made before any outcome data
+    existed for this node."""
+    if outcome_log is None:
+        return 0.0
+    quality = outcome_log.node_quality(worker_name)
+    if quality is None:
+        return 0.0
+    return (quality - 0.5) * OUTCOME_QUALITY_WEIGHT
+
 
 def _transfer_penalty(job: dict, worker_name: str, topology: TopologyMap, master_node: str) -> float:
     """Estimated cost, in score points, of shipping this job's inputs to
@@ -74,6 +98,7 @@ def score_pair(
     worker: dict,
     topology: TopologyMap,
     master_node: str = "master",
+    outcome_log=None,
 ) -> float:
     """Same scoring logic as GlobalDecisionBrain.decide, exposed standalone
     so the matcher can build a full cost matrix without going through the
@@ -82,6 +107,11 @@ def score_pair(
     score = priority
             - (latency_ms / 100) * compute_weight        # RTT cost, per Phase 2a
             - transfer_seconds * BANDWIDTH_PENALTY_WEIGHT # input-shipping cost, Phase 2c
+            + (node_quality - 0.5) * OUTCOME_QUALITY_WEIGHT # track record, closing the outcomes loop
+
+    `outcome_log` is optional (a tron.orchestrator.outcomes.OutcomeLog) —
+    omit it and this scores exactly as it did before outcome feedback
+    existed.
     """
     if job.get("gpu") and not worker.get("gpu"):
         return INFEASIBLE_SCORE
@@ -91,7 +121,8 @@ def score_pair(
     latency_ms = topology.latency(master_node, worker_name)
     penalty = 0.0 if latency_ms is None else (latency_ms / 100.0) * weight
     bandwidth_penalty = _transfer_penalty(job, worker_name, topology, master_node)
-    return priority - penalty - bandwidth_penalty
+    quality_bonus = _outcome_quality_bonus(worker_name, outcome_log)
+    return priority - penalty - bandwidth_penalty + quality_bonus
 
 
 def match_jobs_to_workers(
@@ -99,12 +130,17 @@ def match_jobs_to_workers(
     idle_workers: dict[str, dict],
     topology: TopologyMap,
     master_node: str = "master",
+    outcome_log=None,
 ) -> list[tuple[str, str]]:
     """Return (job_id, worker_name) pairs forming the assignment that
     maximizes total score across all pairs simultaneously. Leftover jobs
     or workers (unequal counts, or pairs that hit INFEASIBLE_SCORE) are
     simply omitted — they're picked up on the next match cycle, or by
     /next_job's own per-worker fallback for anything not yet matched.
+
+    `outcome_log` is optional — pass a tron.orchestrator.outcomes.OutcomeLog
+    to let nodes' real training track records bias placement alongside the
+    measured latency/bandwidth terms; omit it for topology-only scoring.
     """
     if not jobs or not idle_workers:
         return []
@@ -116,7 +152,10 @@ def match_jobs_to_workers(
     cost = np.zeros((n_jobs, n_workers))
     for i, job in enumerate(jobs):
         for j, worker_name in enumerate(worker_names):
-            score = score_pair(job, worker_name, idle_workers[worker_name], topology, master_node)
+            score = score_pair(
+                job, worker_name, idle_workers[worker_name], topology, master_node,
+                outcome_log=outcome_log,
+            )
             cost[i, j] = -score  # linear_sum_assignment minimizes; we want to maximize score
 
     row_indices, col_indices = linear_sum_assignment(cost)

@@ -94,6 +94,11 @@ class TrainingSession:
         # (round, shard) -> task_id, so lifecycle events all target one task
         self._task_ids: dict[tuple[int, int], str] = {}
         self._wire_bytes = 0
+        # shard_idx -> the node_id it last reported from. Fed into the
+        # outcome recorded at the final merge so placement feedback
+        # (matcher.py's outcome_log-based scoring) knows which real nodes
+        # this run's result should reflect on.
+        self._shard_node_ids: dict[int, str] = {}
 
     # -- problem setup -------------------------------------------------
 
@@ -239,6 +244,7 @@ class TrainingSession:
                 self._log.append(task_id, "started", {"node_id": nid}, node_id=nid)
 
             nid = node_id or f"shard-{shard_idx}"
+            self._shard_node_ids[shard_idx] = nid
             self._log.append(
                 task_id, "completed",
                 {"output_hash": art.artifact_id,
@@ -279,18 +285,27 @@ class TrainingSession:
         accuracy_after = model.accuracy(self._x_test, self._y_test)
         gain = accuracy_after - self._accuracy_before
         cost = float(self.num_rounds * self.num_shards * self.local_steps)  # total local steps
+        module_id = f"distributed-{self.model_kind}"
         try:
             from tron.orchestrator.outcomes import TrainingOutcome
+            # Estimate refinement: use this session_id/module's own history
+            # as "expected" when it exists, instead of always backfilling
+            # expected=actual. A repeated session_id (e.g. a benchmark run
+            # replayed across CI runs) accumulates a real prediction to
+            # judge future runs against.
+            expected_gain = self._outcome_log.estimate_capability_gain(self.session_id, module_id)
+            expected_cost = self._outcome_log.estimate_cost(self.session_id, module_id)
             self._outcome_log.record(TrainingOutcome(
                 artifact_id=merged_hash,
                 adapter_name=self.session_id,
-                module_id=f"distributed-{self.model_kind}",
-                expected_capability_gain=gain,   # no separate prediction was made
+                module_id=module_id,
+                expected_capability_gain=gain if expected_gain is None else expected_gain,
                 actual_capability_gain=gain,
-                expected_cost=cost,
+                expected_cost=cost if expected_cost is None else expected_cost,
                 actual_cost=cost,
                 success=gain > 0.0,
                 timestamp=datetime.now(timezone.utc).isoformat(),
+                node_ids=sorted(set(self._shard_node_ids.values())),
             ))
             self._outcome_recorded = True
         except Exception:

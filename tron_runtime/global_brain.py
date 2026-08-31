@@ -6,9 +6,16 @@ expensive it measurably is, in network terms, to place this job on the
 worker being considered — a latency term (Phase 2a) and an
 input-transfer term over measured bandwidth (Phase 2c). See
 tron/spine/topology.py for how both numbers are collected, and
-tron/spine/matcher.py, which uses the identical formula so the periodic
-match step and this per-worker fallback never disagree about what a
-placement costs.
+tron/spine/matcher.py, which shares this formula so the periodic match
+step and this per-worker fallback never disagree about what a placement
+costs. One deliberate difference: matcher.score_pair also takes an
+optional outcome-history bonus (how well a node's past training runs
+went), which is NOT replicated here. That term depends only on
+worker_name, not on the job — and decide() below picks the best JOB for
+one fixed worker in a single call, so a worker-only term would shift
+every candidate job's score by the same constant and therefore never
+change which one wins argmax. It would be dead weight here; it earns its
+keep only in the matcher's cross-worker assignment.
 """
 from __future__ import annotations
 

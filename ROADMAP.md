@@ -326,6 +326,40 @@ technical design behind each phase.
   persists an `outcomes.json` next to the run's spine. Tests:
   `tests/test_distributed_training.py` (recorded once, not per poll;
   cost == rounds·shards·local_steps), `tests/test_lora_spine.py`.
-- [ ] Still open: `outcomes.py` records outcomes but nothing yet *reads*
-  them back to adjust future placement/adapter decisions — the feedback
-  loop half of the TRON-II idea.
+- [x] The feedback loop half of the TRON-II idea: outcomes are now read
+  back, not just recorded. Three pieces:
+  - **Estimate refinement** — `TrainingOrchestrator._estimate_capability_gain`
+    / `_estimate_adapter_cost` check `OutcomeLog.estimate_capability_gain`
+    / `.estimate_cost` first and only fall through to the original
+    hardcoded per-adapter priors (`ray` -> 0.9, `sb3` -> 1.0, ...) when
+    there's no history yet. The three real-workload recorders
+    (`lora_spine.py`, `param_server.py`, `lora_param_server.py`) do the
+    same for their own "expected" value at record time, so `accuracy()`
+    stops being trivially 1.0 on every run for a repeated `run_name`/
+    session id (e.g. `benchmark_lora.py`'s fixed run name across CI runs)
+    and becomes a real prediction-vs-actual signal.
+  - **Module specificity** — `OutcomeLog.pair_accuracy` /
+    `.pair_success_rate` key by `(adapter_name, module_id)`, not just
+    `adapter_name`, so an adapter that's reliable for one module and not
+    another doesn't get flattened into one blended number.
+    `TrainingPolicy.score_estimate` prefers the pair-specific numbers,
+    falling back to the adapter-wide ones the pair has no history.
+  - **Placement feedback** — `TrainingOutcome` now carries `node_ids` (the
+    spine worker names that took part in that run); `OutcomeLog.node_quality`
+    turns that into a per-node success rate. `matcher.score_pair` /
+    `match_jobs_to_workers` take an optional `outcome_log` and fold in a
+    `(node_quality - 0.5)` bonus/penalty on top of the existing
+    latency/bandwidth terms — "zero unless known," same contract as the
+    bandwidth term, so a node with no recorded outcomes scores exactly as
+    before. `queue_server.py` passes `training_outcomes` into both real
+    call sites (`/scheduler/whatif` and the periodic match cycle).
+    Deliberately NOT added to `tron_runtime/global_brain.py`'s per-worker
+    `/next_job` fallback: that call fixes `worker_name` and picks among
+    jobs, so a worker-only term would shift every candidate's score by
+    the same constant and never change the argmax — dead weight there,
+    real weight in the matcher's cross-worker assignment.
+  Tests: `tests/test_outcomes_feedback.py` (12 cases — pair stats staying
+  scoped per module, the estimate/adapter-wide/hardcoded fallback chain,
+  node_quality from participation, matcher steering toward the
+  better-track-record node when latency ties, save/load round-trip
+  including old outcomes.json files with no `node_ids` key).

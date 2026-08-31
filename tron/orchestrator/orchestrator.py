@@ -84,6 +84,7 @@ class TrainingOrchestrator:
     def _estimate_adapter_performance(
         self,
         plan: Optional[MissionPlan],
+        module_id: Optional[str] = None,
         overrides: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> Dict[str, Dict[str, float]]:
         if overrides is not None:
@@ -94,13 +95,25 @@ class TrainingOrchestrator:
 
         for adapter_name in self.integrator.available_names():
             estimates[adapter_name] = {
-                "capability_gain": self._estimate_capability_gain(adapter_name, plan),
-                "cost": self._estimate_adapter_cost(adapter_name, substrate_name),
+                "capability_gain": self._estimate_capability_gain(adapter_name, plan, module_id),
+                "cost": self._estimate_adapter_cost(adapter_name, substrate_name, module_id),
             }
 
         return estimates
 
-    def _estimate_capability_gain(self, adapter_name: str, plan: Optional[MissionPlan]) -> float:
+    def _estimate_capability_gain(
+        self, adapter_name: str, plan: Optional[MissionPlan], module_id: Optional[str] = None
+    ) -> float:
+        # Closing the outcomes feedback loop: what this adapter has
+        # actually delivered in past runs is a better estimate than a
+        # fixed guess, once there's enough history to ask. Falls through
+        # to the hardcoded priors below for an adapter/module pair that
+        # has never run yet.
+        if self.outcome_log:
+            observed = self.outcome_log.estimate_capability_gain(adapter_name, module_id)
+            if observed is not None:
+                return observed
+
         if adapter_name == "sb3":
             return 1.0
         if adapter_name == "ray":
@@ -111,7 +124,14 @@ class TrainingOrchestrator:
             return 0.4
         return 0.5
 
-    def _estimate_adapter_cost(self, adapter_name: str, substrate_name: Optional[str]) -> float:
+    def _estimate_adapter_cost(
+        self, adapter_name: str, substrate_name: Optional[str], module_id: Optional[str] = None
+    ) -> float:
+        if self.outcome_log:
+            observed = self.outcome_log.estimate_cost(adapter_name, module_id)
+            if observed is not None:
+                return observed
+
         if adapter_name == "ray":
             return 0.8 if substrate_name == "gpu" else 1.2
         if adapter_name == "sb3":
@@ -207,8 +227,13 @@ class TrainingOrchestrator:
                     print(f"[Orchestrator] Reusing existing artifact(s): {reuse_artifacts}")
                     return True
 
+            # Adapter selection happens once per run, not once per module,
+            # so the primary (first) module is what estimate-refinement and
+            # pair-specific outcome scoring key off of.
+            primary_module_id = config.modules[0].module_id if config.modules else None
+
             dataset["adapter_estimates"] = self._estimate_adapter_performance(
-                mission_plan, overrides=config.adapter_estimates
+                mission_plan, module_id=primary_module_id, overrides=config.adapter_estimates
             )
 
             adapter_name = (
@@ -219,6 +244,7 @@ class TrainingOrchestrator:
                 preferred_substrate=dataset.get("selected_substrate"),
                 available=self.integrator.available_names(),
                 requested=adapter_name,
+                module_id=primary_module_id,
             )
             if selected_adapter_name is None:
                 raise RuntimeError("No adapter was selected by policy")
