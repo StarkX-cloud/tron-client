@@ -248,3 +248,45 @@ def test_shard_index_out_of_range_is_rejected(client):
     tc.post("/training/session", json={"session_id": "sess-oob", "num_shards": 2, "num_rounds": 2})
     r = tc.get("/training/session/sess-oob/shard/5/data")
     assert r.status_code == 400
+
+
+def test_finished_run_is_recorded_as_a_training_outcome(client):
+    tc, qs = client
+    if qs.training_outcomes is None:
+        pytest.skip("tron.orchestrator.outcomes unavailable")
+
+    tc.post("/training/session", json={
+        "session_id": "sess-outcome",
+        "num_shards": NUM_SHARDS, "num_rounds": NUM_ROUNDS, "local_steps": LOCAL_STEPS, "lr": LR,
+        "model_config": {"hidden_dim": HIDDEN_DIM}, "dataset_config": dict(DATASET),
+        "skew": SKEW, "shard_seed": SHARD_SEED,
+    })
+    _run_all_shards(tc, "sess-outcome")
+    tc.get("/training/session/sess-outcome/result")  # trigger nothing extra; outcome recorded at final merge
+
+    body = tc.get("/training/outcomes").json()
+    assert body["count"] == 1
+    o = body["outcomes"][0]
+    assert o["adapter_name"] == "sess-outcome"
+    assert o["module_id"] == "distributed-numpy_mlp"
+    # compute spent = total local SGD steps across all shards
+    assert o["actual_cost"] == NUM_ROUNDS * NUM_SHARDS * LOCAL_STEPS
+    # training a classifier from an untrained init should gain capability
+    assert o["actual_capability_gain"] > 0.0
+    assert o["success"] is True
+    assert o["capability_per_compute"] == pytest.approx(o["actual_capability_gain"] / o["actual_cost"])
+
+
+def test_outcome_is_recorded_once_not_per_result_poll(client):
+    tc, qs = client
+    if qs.training_outcomes is None:
+        pytest.skip("tron.orchestrator.outcomes unavailable")
+    tc.post("/training/session", json={
+        "session_id": "sess-once", "num_shards": NUM_SHARDS, "num_rounds": NUM_ROUNDS,
+        "local_steps": LOCAL_STEPS, "lr": LR, "model_config": {"hidden_dim": HIDDEN_DIM},
+        "dataset_config": dict(DATASET), "skew": SKEW, "shard_seed": SHARD_SEED,
+    })
+    _run_all_shards(tc, "sess-once")
+    for _ in range(3):
+        tc.get("/training/session/sess-once/result")
+    assert tc.get("/training/outcomes").json()["count"] == 1

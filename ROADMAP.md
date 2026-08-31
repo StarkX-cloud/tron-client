@@ -133,8 +133,17 @@ technical design behind each phase.
           LoRA / Pythia-70M path isn't wired through this transport yet
           (see the Phase 3 scale-up section) — that's the "real model
           over a real network" combination.
-  - [ ] Not yet done: a public writeup / standalone repo extraction — see
-        the "getting noticed" discussion this phase was scoped around.
+  - [x] **Public writeup + standalone extraction.**
+        `writeup/distributed-training.md` is a self-contained account —
+        the idea, the numpy result, the LoRA/Pythia result, the move to a
+        real socket, reproduction steps, and an explicit "what this does
+        not claim". `scripts/extract_training_repo.py` copies the spine +
+        training + distributed code + the load-bearing tests into a
+        minimal standalone tree (with its own README / requirements /
+        minimal `tron/__init__.py`); verified — the extracted repo's
+        suite runs 61 passed, 2 skipped (the outcome tests, which need
+        `tron.orchestrator`, skip cleanly). Nothing is published by the
+        script; it prepares the tree and prints the `git init` steps.
 - [x] **Phase 3 scale-up — same story, a real pretrained model.**
       `tron/training/lora_demo.py` + `benchmark_lora.py`: the identical
       local-SGD / weight-merging comparison, applied to EleutherAI's
@@ -278,11 +287,24 @@ technical design behind each phase.
 
 ## Known follow-ups (not blocking, tracked here so they aren't lost)
 
-- `tron/gpu/` OpenAI-compatible gateway (`openai_bridge.py`, `scheduler.py`)
-  is functional but its standalone demo docs/scripts were removed along
-  with the duplicate `vgpu/` package — reviving the gateway demo needs new
-  docs pointing at `tron.gpu.*` instead of the old `vgpu.*` paths.
-- `TRON-II`'s outcome-tracking idea (score adapters by capability-gained
-  per compute spent, adjust future decisions from actual outcomes) is
-  worth pointing at Phase 3's training runs once those exist — right now
-  `tron/orchestrator/outcomes.py` has no real workload feeding it.
+- [x] `tron/gpu/` OpenAI-compatible gateway now has `tron/gpu/README.md`
+  documenting the `tron.gpu.*` layout (cluster / runtime / scheduler /
+  openai_bridge), how to run the bridge (with the mocked-proxy test
+  path), **and** the honest gap: `TRONOpenAIProxy` still posts to
+  `/submit_job` and polls `/jobs` — the older standalone scheduler's API,
+  not the spine server's `/submit` + `/status/{id}`. Folding an OpenAI
+  request into a real spine Task is the remaining wiring.
+- [x] `TRON-II`'s outcome-tracking now has a real workload:
+  `tron/orchestrator/outcomes.py`'s `OutcomeLog` is fed by every finished
+  training run. `param_server.TrainingSession` (numpy, over the wire) and
+  `lora_spine.run_local_sgd_lora_with_spine` (LoRA) each record one
+  `TrainingOutcome` — capability gained (held-out accuracy delta vs. the
+  untrained init, or eval-loss reduction) over compute spent (total local
+  SGD steps). `GET /training/outcomes` on `queue_server.py` reports them
+  with a `capability_per_compute` ratio; `benchmark_lora.py --spine-dir`
+  persists an `outcomes.json` next to the run's spine. Tests:
+  `tests/test_distributed_training.py` (recorded once, not per poll;
+  cost == rounds·shards·local_steps), `tests/test_lora_spine.py`.
+- [ ] Still open: `outcomes.py` records outcomes but nothing yet *reads*
+  them back to adjust future placement/adapter decisions — the feedback
+  loop half of the TRON-II idea.

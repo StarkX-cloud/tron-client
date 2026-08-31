@@ -63,11 +63,20 @@ def run(spine_dir: str | None = None) -> dict:
         root = Path(spine_dir)
         log = EventLog(path=root / "log.db")
         store = ArtifactStore(root=root / "artifacts")
+        outcome_log = None
+        try:
+            from tron.orchestrator.outcomes import OutcomeLog
+            outcome_log = OutcomeLog(storage_path=str(root / "outcomes.json"))
+        except Exception:
+            pass
         spined = run_local_sgd_lora_with_spine(
             base_model, shards, held_out_blocks,
             num_rounds=NUM_ROUNDS, local_steps=LOCAL_STEPS, lr=LR,
             event_log=log, artifact_store=store,
+            outcome_log=outcome_log, run_name="pythia70m-lora-local-sgd",
         )
+        if outcome_log is not None:
+            outcome_log.save()
         print(f"[benchmark_lora] recorded {NUM_SHARDS * NUM_ROUNDS} adapter "
               f"training tasks into the spine at {root}")
 
