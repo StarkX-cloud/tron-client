@@ -773,6 +773,18 @@ def create_training_session(payload: dict = None):
         )
         training_sessions.register(session_id, session)
     else:
+        dataset_factory = None
+        if payload.get("problem") == "telecom_congestion":
+            # The concrete telecom demo: N cell towers, each with its own
+            # (synthetic, illustrative — see tron/training/telecom_data.py's
+            # docstring) traffic pattern, predicting next-interval
+            # congestion tier. Everything downstream of this hook — the
+            # wire protocol, the spine, the Grid, outcome scoring — is the
+            # exact same machinery every other session on this endpoint
+            # uses; only the data differs.
+            from tron.training.telecom_data import build_tower_problem
+            dataset_factory = build_tower_problem
+
         session = _bad_request_on_valueerror(
             training_sessions.create,
             session_id,
@@ -788,6 +800,7 @@ def create_training_session(payload: dict = None):
             skew=float(payload.get("skew", 0.9)),
             shard_seed=int(payload.get("shard_seed", 1)),
             outcome_log=training_outcomes,
+            dataset_factory=dataset_factory,
         )
 
     out = session.status()

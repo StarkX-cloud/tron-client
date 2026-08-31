@@ -434,3 +434,32 @@ technical design behind each phase.
   larger, different feature) — and it does not defend against a caller
   who holds a valid token but sends bad data on purpose. The master also
   still remains a single process with no replication.
+- [x] Built a concrete telecom demo on top of all of the above, instead
+  of continuing general-purpose hardening — the honest gap wasn't more
+  mechanism, it was that nothing here was pointed at a problem a telecom
+  actually recognizes. `tron/training/telecom_data.py`: N cell towers,
+  each a hand-built (synthetic — no real carrier data) traffic archetype
+  (business-district, residential, entertainment-district, transit-hub),
+  predicting next-interval congestion tier from recent signals — genuinely
+  non-IID by construction, the same honest hard case this project has
+  used throughout. Required zero new training mechanism: one
+  `dataset_factory` hook added to `TrainingSession` (default path
+  completely untouched, existing pinned tests unaffected) lets
+  `queue_server.py`'s `/training/session` accept `problem:
+  "telecom_congestion"` and everything downstream — the real wire
+  transport, spine recording, Grid replay, outcome scoring, auth,
+  at-rest encryption — is exactly what already existed.
+  `examples/telecom_demo/run_cell_tower_demo.py` runs it end to end and
+  reports held-out accuracy vs. a naive baseline plus the honest
+  bandwidth comparison (see writeup/telecom-demo.md — reported per-round,
+  not as a misleading cumulative-vs-one-time-dump number, after a real
+  run showed those two can be comparable at this toy model's tiny
+  parameter count). Tests: `tests/test_telecom_demo.py` (7 cases —
+  dataset shape/determinism/genuine non-IID-ness, the wire path actually
+  using the tower dataset not the default one, and the trained model
+  meaningfully beating the naive majority-tier baseline, not just "the
+  run completed"). Full suite: 197 passing.
+  Still not done: real telecom data of any kind (explicitly synthetic,
+  said twice in the writeup on purpose), validated at real tower counts
+  (4, not hundreds), and everything already listed above as not done for
+  the underlying distributed-training machinery.
