@@ -56,10 +56,24 @@ Nothing in the code changes — only the `--master` URL.
    # open http://<master-host>:9000/grid/ and scrub the event log
    ```
 
+## LoRA adapters over the same wire
+
+```bash
+python -m examples.distributed_training.run_local --lora --shards 2 --rounds 3
+```
+
+Needs `torch transformers peft`. Now the round's POST body is a LoRA
+**adapter state dict** (~400KB for Pythia-70M) instead of a numpy vector,
+and the ~282MB base model never crosses the socket — each shard process
+loads its own frozen copy from the HF cache. This is the "low-rank delta,
+not a full checkpoint, is the unit of communication" thesis running over
+a real network. `tests/test_lora_over_wire.py` pins the merged adapter
+tensor-for-tensor against the single-process `lora_demo.run_local_sgd_lora`.
+
 ## What "bit-for-bit" costs, and what it doesn't claim
 
-The bit-for-bit guarantee is about the *transport not corrupting the
-computation*. It is not a claim about scale: this is still the
-few-hundred-parameter numpy MLP on synthetic non-IID data. The LoRA /
-Pythia-70M path (`tron/training/lora_demo.py`) is the "real model" story;
-wiring *that* through this same transport is tracked in ROADMAP.md.
+The bit-for-bit / tensor-for-tensor guarantee is about the *transport not
+corrupting the computation*. It is not a claim about scale: the numpy run
+is a few-hundred-parameter MLP on synthetic data; the LoRA run is
+Pythia-70M with a rank-8 adapter on ~1MB of text for a few dozen steps.
+The point is that the mechanism is correct and the transport is faithful.

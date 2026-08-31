@@ -57,6 +57,12 @@ def main(argv=None) -> int:
     parser.add_argument("--rounds", type=int, default=4)
     parser.add_argument("--local-steps", type=int, default=5)
     parser.add_argument("--master", default=None, help="use an already-running master instead of starting one")
+    parser.add_argument(
+        "--lora", action="store_true",
+        help="send LoRA adapters (Pythia-70M) instead of a numpy vector — needs "
+             "torch/transformers/peft; each shard loads the base model locally, "
+             "only the ~400KB adapter crosses the socket",
+    )
     args = parser.parse_args(argv)
 
     server_proc = None
@@ -74,14 +80,19 @@ def main(argv=None) -> int:
         _wait_for_health(base_url)
 
     try:
-        sess = requests.post(f"{base_url}/training/session", json={
+        session_req = {
             "num_shards": args.shards,
             "num_rounds": args.rounds,
             "local_steps": args.local_steps,
-        }, timeout=10).json()
+        }
+        if args.lora:
+            session_req["model_kind"] = "lora"
+        sess = requests.post(f"{base_url}/training/session", json=session_req, timeout=120).json()
         session_id = sess["session_id"]
-        print(f"[example] session {session_id}: {args.shards} shards x {args.rounds} rounds")
+        kind = "LoRA adapters" if args.lora else "numpy vectors"
+        print(f"[example] session {session_id}: {args.shards} shards x {args.rounds} rounds, sending {kind}")
 
+        shard_timeout = 900 if args.lora else 180  # LoRA shards load Pythia first
         shard_procs = []
         for k in range(args.shards):
             shard_procs.append(subprocess.Popen(
@@ -90,25 +101,32 @@ def main(argv=None) -> int:
                 cwd=str(REPO_ROOT), env=_os_environ(),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             ))
+            if args.lora:
+                time.sleep(3)  # stagger the base-model loads a little
 
         for k, p in enumerate(shard_procs):
-            out, _ = p.communicate(timeout=180)
+            out, _ = p.communicate(timeout=shard_timeout)
             tag = f"[shard {k} rc={p.returncode}]"
             for line in (out or "").splitlines():
                 print(f"{tag} {line}")
 
-        result = requests.get(f"{base_url}/training/session/{session_id}/result", timeout=10)
+        result = requests.get(f"{base_url}/training/session/{session_id}/result", timeout=120)
         if result.status_code != 200:
             print(f"[example] run did not finish (HTTP {result.status_code})")
             return 1
         body = result.json()
         wire = body["wire_bytes_transferred"]
-        algo = body["algorithmic_comm_bytes"]
         print("\n" + "=" * 60)
-        print(f"merged model held-out accuracy  : {body['accuracy']:.4f}")
+        if args.lora:
+            print(f"merged adapter eval loss       : {body['eval_loss_before']:.4f} -> {body['eval_loss_after']:.4f}")
+            print(f"adapter vs full model          : {body['adapter_bytes']:,} / {body['full_model_bytes']:,} B  "
+                  f"({body['size_ratio']:.0f}x)")
+            print(f"final merged adapter artifact  : {body['final_adapter_hash'][:16]}...")
+        else:
+            print(f"merged model held-out accuracy  : {body['accuracy']:.4f}")
+            print(f"  in-process metric counts only : {body['algorithmic_comm_bytes']:,}  (the upload side)")
+            print(f"final merged vector artifact    : {body['final_vector_hash'][:16]}...")
         print(f"bytes actually sent over sockets: {wire:,}")
-        print(f"  in-process metric counts only : {algo:,}  (the upload side)")
-        print(f"final merged vector artifact    : {body['final_vector_hash'][:16]}...")
         print("=" * 60)
         print(f"replay this run in the Grid: {base_url}/grid/  (events tagged session={session_id})")
         return 0
@@ -123,7 +141,20 @@ def main(argv=None) -> int:
 
 def _os_environ() -> dict:
     import os
-    return dict(os.environ)
+    env = dict(os.environ)
+    # Several torch/transformers processes each loading a model on one
+    # Windows box otherwise hit a native crash from duplicate OpenMP/MKL
+    # runtimes (exit code 0xC0000005). Single-threaded BLAS per process +
+    # the duplicate-lib escape hatch keeps them from stepping on each
+    # other; this is a local-orchestration detail, not something a real
+    # multi-host deployment needs.
+    env.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")   # the actual crash guard
+    # a few threads each, not all cores, so N concurrent shard processes
+    # don't oversubscribe the box (and don't run dead slow single-threaded)
+    env.setdefault("OMP_NUM_THREADS", "3")
+    env.setdefault("MKL_NUM_THREADS", "3")
+    env.setdefault("TOKENIZERS_PARALLELISM", "false")
+    return env
 
 
 if __name__ == "__main__":
