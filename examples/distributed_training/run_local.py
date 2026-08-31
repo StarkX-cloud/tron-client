@@ -22,6 +22,7 @@ Nothing else changes — the vectors just travel over a real network.
 from __future__ import annotations
 
 import argparse
+import random
 import socket
 import subprocess
 import sys
@@ -37,6 +38,33 @@ def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _with_retries(description: str, call, max_retries: int = 5):
+    """Retry a transient network failure (connection reset, TLS-layer
+    corruption, timeout) with exponential backoff + jitter. This example
+    script talks to the master directly for its own two calls (create
+    session, fetch result) rather than through
+    tron.training.distributed.shard_client.RequestsTransport, which shard
+    subprocesses use and which carries the same retry logic — see that
+    module's docstring for why it exists: a real run against a live
+    remote master hit intermittent, real connection-layer failures on
+    an ordinary consumer network path (not a bug in the master), and
+    zero retry logic meant one bad handshake killed the whole run."""
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            return call()
+        except requests.exceptions.RequestException as exc:
+            last_error = exc
+            if attempt >= max_retries:
+                break
+            delay = min(20.0, 0.5 * (2 ** attempt))
+            wait = random.uniform(0, delay)
+            print(f"[example] {description} failed ({exc.__class__.__name__}: {exc}); "
+                  f"retrying in {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
+            time.sleep(wait)
+    raise last_error
 
 
 def _wait_for_health(base_url: str, timeout: float = 30.0) -> None:
@@ -87,7 +115,10 @@ def main(argv=None) -> int:
         }
         if args.lora:
             session_req["model_kind"] = "lora"
-        sess = requests.post(f"{base_url}/training/session", json=session_req, timeout=120).json()
+        sess = _with_retries(
+            "create session",
+            lambda: requests.post(f"{base_url}/training/session", json=session_req, timeout=120),
+        ).json()
         session_id = sess["session_id"]
         kind = "LoRA adapters" if args.lora else "numpy vectors"
         print(f"[example] session {session_id}: {args.shards} shards x {args.rounds} rounds, sending {kind}")
@@ -110,7 +141,10 @@ def main(argv=None) -> int:
             for line in (out or "").splitlines():
                 print(f"{tag} {line}")
 
-        result = requests.get(f"{base_url}/training/session/{session_id}/result", timeout=120)
+        result = _with_retries(
+            "fetch result",
+            lambda: requests.get(f"{base_url}/training/session/{session_id}/result", timeout=120),
+        )
         if result.status_code != 200:
             print(f"[example] run did not finish (HTTP {result.status_code})")
             return 1

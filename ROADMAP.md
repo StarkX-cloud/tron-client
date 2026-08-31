@@ -363,3 +363,20 @@ technical design behind each phase.
   node_quality from participation, matcher steering toward the
   better-track-record node when latency ties, save/load round-trip
   including old outcomes.json files with no `node_ids` key).
+- [x] Verified the distributed transport against a real WAN link, not
+  just localhost — deployed the master to Render (free tier, Oregon) and
+  ran shards against it from a genuinely separate network. This surfaced
+  a real gap `shard_client.RequestsTransport` had zero retry logic, so
+  the first run's intermittent connection-layer failures (TLS record
+  corruption, connection resets — confirmed with both `requests` and
+  `curl`, so a property of the link, not a client-library quirk)
+  permanently killed a shard. Fixed with exponential-backoff + jitter
+  retries on transient failures only (never on a 4xx). Re-run after the
+  fix survived the same flaky link — one retry fired mid-run, training
+  finished clean, `GET /training/outcomes` on the live master confirmed
+  `node_ids` recorded correctly. See writeup/distributed-training.md's
+  "Verified against a live public master" section for the real numbers
+  (measured latency, failure rate, final accuracy). Explicitly not yet
+  done: auth between nodes, encryption beyond what HTTPS provides, and
+  the master is a single process with no replication — real gaps before
+  this could run multi-tenant.

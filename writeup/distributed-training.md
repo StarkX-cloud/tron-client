@@ -117,9 +117,43 @@ the final merged model is **bit-for-bit identical** to the single-process
 operation. If serialization ever corrupts a number, that test fails.
 
 Running across genuinely separate physical machines is then a deployment
-detail, not a code change: point `--master` at another host. (A prior
-commit already exercised a real worker against a deployed Render instance
-over the public internet.)
+detail, not a code change: point `--master` at another host.
+
+**Verified against a live public master, not just localhost.** A free
+Render instance (`render.yaml`, Oregon region) was deployed as the master;
+this repo's own machine, on an ordinary consumer network with no special
+tuning, ran the shards against it over the public internet — a real WAN
+link, not a loopback interface. Two things that only a real link surfaces:
+
+- **Measured latency.** `time_connect` ~145ms, full TLS handshake ~300ms,
+  a complete request round trip 430ms-930ms (`curl -w`, 5-sample spread).
+  Nothing here was simulated or injected — it's what the actual path to
+  Oregon costs.
+- **A real fault, and a real fix.** The very first run hit intermittent
+  connection-layer failures mid-run — TLS record corruption
+  (`SSLV3_ALERT_BAD_RECORD_MAC`) and plain connection resets, roughly
+  1-in-3 to 1-in-6 requests during the bad stretches, confirmed with both
+  Python's `requests` and `curl` (so not a client-library quirk — a
+  property of the path itself). `shard_client.RequestsTransport` had zero
+  retry logic at that point: one bad handshake permanently killed a
+  shard, full stop. That's exactly the failure mode a system aiming at
+  real, imperfect telecom links cannot have. Fixed with exponential
+  backoff + full jitter on transient failures (connection errors,
+  timeouts, 5xx — never on a 4xx, which is a real application error, not
+  a transient one), in both `RequestsTransport` (the code path shard
+  processes actually use) and the `run_local.py` example harness's own
+  calls. Re-run after the fix: same flaky link, one retry fired mid-run
+  (visible in the run's own log output) and the run finished clean — 3
+  shards, 4 rounds, 0.8375 held-out accuracy, 40,704 bytes over the wire.
+  `GET /training/outcomes` on that live master confirms the outcome
+  recorded `node_ids: ["shard-0","shard-1","shard-2"]` — the placement-
+  feedback plumbing (see ROADMAP.md) working end to end against a real
+  deployment, not just in a test process.
+
+This is not a claim of production hardening — see "What this does not
+claim" below — but it is a claim that the transport survives a real,
+uncontrolled, intermittently-corrupting network path, because it was
+handed one and did.
 
     python -m examples.distributed_training.run_local --shards 3 --rounds 4
 
@@ -158,6 +192,13 @@ unit of compute spent (total local SGD steps) — readable at
   *scale* — it's Pythia-70M with a rank-8 adapter, not a frontier model.
 - **A production training system.** This is a demonstration of mechanism,
   with tests that pin every number, not a batteries-included framework.
+- **Hardened for a hostile network, not just a flaky one.** The retry
+  logic added above survives transient connection failures. It does not
+  add authentication between nodes, encryption above what HTTPS already
+  provides, or protection against a malicious participant sending
+  corrupt-but-well-formed data. The master is also a single process — one
+  Render dyno, one point of failure, no replication. All real gaps before
+  this is a system a telecom (or anyone) could run multi-tenant.
 
 ---
 
