@@ -156,16 +156,26 @@ def run_local_sgd_lora_with_spine(
         cost = float(num_rounds * len(shards) * local_steps)
         try:
             from tron.orchestrator.outcomes import TrainingOutcome
+            # Estimate refinement: if this exact (run_name, module) pair —
+            # or at least this module — has run before, use its historical
+            # average as the "expected" value instead of backfilling
+            # expected=actual. That's what makes accuracy() a real signal
+            # on the *next* run instead of trivially 1.0 on every run.
+            # First run for a module still has no history, so it falls
+            # back to expected=actual, same as before this existed.
+            expected_gain = outcome_log.estimate_capability_gain(run_name, "lora-local-sgd")
+            expected_cost = outcome_log.estimate_cost(run_name, "lora-local-sgd")
             outcome_log.record(TrainingOutcome(
                 artifact_id=round_init_hash,  # last merged adapter
                 adapter_name=run_name,
                 module_id="lora-local-sgd",
-                expected_capability_gain=gain,
+                expected_capability_gain=gain if expected_gain is None else expected_gain,
                 actual_capability_gain=gain,
-                expected_cost=cost,
+                expected_cost=cost if expected_cost is None else expected_cost,
                 actual_cost=cost,
                 success=gain > 0.0,
                 timestamp=datetime.now(timezone.utc).isoformat(),
+                node_ids=sorted(set(shard_node_ids)),
             ))
         except Exception:
             pass

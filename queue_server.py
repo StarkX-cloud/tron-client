@@ -557,7 +557,7 @@ def scheduler_whatif(payload: dict = None):
                 snap.record_latency("master", name, float(lat))
             if bw is not None and float(bw) > 0:
                 snap.record_bandwidth("master", name, float(bw))
-        return [[jid, w] for jid, w in match_jobs_to_workers(jobs, idle, snap)]
+        return [[jid, w] for jid, w in match_jobs_to_workers(jobs, idle, snap, outcome_log=training_outcomes)]
 
     baseline = _assign(apply_overrides=False)
     hypothetical = _assign(apply_overrides=True)
@@ -1005,7 +1005,7 @@ def _run_match_cycle():
         if not idle_workers:
             return
 
-        assignments = match_jobs_to_workers(list(job_queue), idle_workers, topology)
+        assignments = match_jobs_to_workers(list(job_queue), idle_workers, topology, outcome_log=training_outcomes)
         for job_id, worker_name in assignments:
             index = next((i for i, j in enumerate(job_queue) if j["id"] == job_id), None)
             if index is None:

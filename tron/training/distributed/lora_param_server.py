@@ -92,6 +92,9 @@ class LoraTrainingSession:
         self._merged: dict[int, str] = {}
         self._task_ids: dict[tuple[int, int], str] = {}
         self._wire_bytes = 0
+        # shard_idx -> the node_id it last reported from — see
+        # param_server.TrainingSession's identical field for why.
+        self._shard_node_ids: dict[int, str] = {}
 
     # -- problem setup -------------------------------------------------
 
@@ -194,6 +197,7 @@ class LoraTrainingSession:
                 self._log.append(task_id, "assigned", {"node_id": nid}, node_id=nid)
                 self._log.append(task_id, "started", {"node_id": nid}, node_id=nid)
 
+            self._shard_node_ids[shard_idx] = nid
             self._log.append(
                 task_id, "completed",
                 {"output_hash": art.artifact_id, "transfer_bytes": self._adapter_bytes},
@@ -227,16 +231,19 @@ class LoraTrainingSession:
             gain = float(self._loss_before - loss_after)   # loss reduction
             cost = float(self.num_rounds * self.num_shards * self.local_steps)
             from tron.orchestrator.outcomes import TrainingOutcome
+            expected_gain = self._outcome_log.estimate_capability_gain(self._run_name, "distributed-lora")
+            expected_cost = self._outcome_log.estimate_cost(self._run_name, "distributed-lora")
             self._outcome_log.record(TrainingOutcome(
                 artifact_id=merged_hash,
                 adapter_name=self._run_name,
                 module_id="distributed-lora",
-                expected_capability_gain=gain,
+                expected_capability_gain=gain if expected_gain is None else expected_gain,
                 actual_capability_gain=gain,
-                expected_cost=cost,
+                expected_cost=cost if expected_cost is None else expected_cost,
                 actual_cost=cost,
                 success=gain > 0.0,
                 timestamp=datetime.now(timezone.utc).isoformat(),
+                node_ids=sorted(set(self._shard_node_ids.values())),
             ))
             self._outcome_recorded = True
             self._loss_after = loss_after
