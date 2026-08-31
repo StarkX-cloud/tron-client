@@ -10,7 +10,7 @@ reliably, and record everything that happens in a form that can be replayed
 from __future__ import annotations
 
 try:
-    from fastapi import FastAPI, Request
+    from fastapi import Depends, FastAPI, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from fastapi.staticfiles import StaticFiles
@@ -26,6 +26,7 @@ except Exception as import_error:
     import http.server
     import socketserver
 
+import hmac
 import json
 import os
 import time
@@ -160,6 +161,31 @@ topology = TopologyMap()
 # path). Backed by the same event_log / artifact_store as everything else,
 # so a distributed run's Tasks land in the same spine the Grid replays.
 training_sessions = TrainingSessionRegistry()
+
+# Auth for the /training/session* wire path. A real WAN run against this
+# server (see writeup/distributed-training.md) surfaced that this whole
+# path had zero access control: anyone who found the master's URL could
+# create sessions (including LoRA ones, which load a real base model —
+# a resource-exhaustion vector) or submit fabricated "trained" data as
+# any shard, silently poisoning the merge. TRON_TRAINING_AUTH_TOKEN, if
+# set, makes every one of those endpoints require a matching X-TRON-AUTH
+# header — set via shard_worker.py's --auth-token / RequestsTransport's
+# auth_token. Unset (the local-dev/test default) means no check at all,
+# so existing tests and the loopback example are unaffected.
+TRAINING_AUTH_TOKEN = os.environ.get("TRON_TRAINING_AUTH_TOKEN") or None
+
+
+def _require_training_auth(request: Request) -> None:
+    """FastAPI dependency guarding every /training/session* and
+    /training/outcomes route. Fail-CLOSED when a secret is configured: a
+    missing or wrong header is always a 401, never silently let through
+    because the caller happened to omit the header — that's the exact bug
+    fixed in /heartbeat below, and it would be no less real here."""
+    if not TRAINING_AUTH_TOKEN:
+        return
+    supplied = request.headers.get("X-TRON-AUTH")
+    if not supplied or not hmac.compare_digest(supplied, TRAINING_AUTH_TOKEN):
+        raise HTTPException(status_code=401, detail="missing or invalid X-TRON-AUTH token")
 
 # Persisted alongside the spine; each finished training session appends one
 # TrainingOutcome (accuracy delta vs. untrained init, over total local steps).
@@ -310,8 +336,14 @@ def heartbeat(worker_name: str, request: Request, payload: dict = None):
 
         worker = workers[worker_name]
 
-        if worker.get("auth_token") and auth_token:
-            if auth_token != worker["auth_token"]:
+        # Fail-closed: if this worker has a token on file, the caller must
+        # present a matching one — omitting the header is not a bypass.
+        # (The prior version only checked `if ... and auth_token`, so a
+        # caller who simply left the header off skipped validation
+        # entirely — silently equivalent to no auth at all.)
+        stored_token = worker.get("auth_token")
+        if stored_token:
+            if not auth_token or not hmac.compare_digest(auth_token, stored_token):
                 return {"alive": False, "error": "invalid auth token"}, 403
 
         worker["last_heartbeat"] = time.time()
@@ -676,7 +708,7 @@ def _lora_base_factory(model_name: str):
     return factory
 
 
-@app.post("/training/session")
+@app.post("/training/session", dependencies=[Depends(_require_training_auth)])
 def create_training_session(payload: dict = None):
     payload = payload or {}
     session_id = payload.get("session_id") or f"trainsess-{uuid.uuid4().hex[:12]}"
@@ -736,7 +768,7 @@ def create_training_session(payload: dict = None):
     return out
 
 
-@app.get("/training/session/{session_id}")
+@app.get("/training/session/{session_id}", dependencies=[Depends(_require_training_auth)])
 def get_training_session(session_id: str):
     session = _training_session_or_404(session_id)
     out = session.status()
@@ -744,7 +776,7 @@ def get_training_session(session_id: str):
     return out
 
 
-@app.get("/training/session/{session_id}/shard/{shard_idx}/data")
+@app.get("/training/session/{session_id}/shard/{shard_idx}/data", dependencies=[Depends(_require_training_auth)])
 def get_training_shard_data(session_id: str, shard_idx: int):
     session = _training_session_or_404(session_id)
     from fastapi.responses import Response
@@ -752,7 +784,7 @@ def get_training_shard_data(session_id: str, shard_idx: int):
     return Response(content=blob, media_type="application/octet-stream")
 
 
-@app.get("/training/session/{session_id}/round/{round_idx}/init")
+@app.get("/training/session/{session_id}/round/{round_idx}/init", dependencies=[Depends(_require_training_auth)])
 def get_training_round_init(session_id: str, round_idx: int, shard: int):
     session = _training_session_or_404(session_id)
     from fastapi.responses import Response
@@ -762,14 +794,14 @@ def get_training_round_init(session_id: str, round_idx: int, shard: int):
     return Response(content=blob, media_type="application/octet-stream")
 
 
-@app.post("/training/session/{session_id}/round/{round_idx}/shard/{shard_idx}")
+@app.post("/training/session/{session_id}/round/{round_idx}/shard/{shard_idx}", dependencies=[Depends(_require_training_auth)])
 async def submit_training_round(session_id: str, round_idx: int, shard_idx: int, request: Request, node_id: str = None):
     session = _training_session_or_404(session_id)
     blob = await request.body()
     return _bad_request_on_valueerror(session.submit_round, round_idx, shard_idx, blob, node_id=node_id)
 
 
-@app.get("/training/session/{session_id}/result")
+@app.get("/training/session/{session_id}/result", dependencies=[Depends(_require_training_auth)])
 def get_training_result(session_id: str):
     session = _training_session_or_404(session_id)
     res = session.result()
@@ -779,7 +811,7 @@ def get_training_result(session_id: str):
     return res
 
 
-@app.get("/training/outcomes")
+@app.get("/training/outcomes", dependencies=[Depends(_require_training_auth)])
 def get_training_outcomes():
     """Every finished training run scored by capability gained (held-out
     accuracy delta vs. the untrained shared init) per unit of compute

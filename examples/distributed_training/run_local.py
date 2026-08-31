@@ -22,6 +22,7 @@ Nothing else changes — the vectors just travel over a real network.
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import socket
 import subprocess
@@ -91,7 +92,14 @@ def main(argv=None) -> int:
              "torch/transformers/peft; each shard loads the base model locally, "
              "only the ~400KB adapter crosses the socket",
     )
+    parser.add_argument(
+        "--auth-token", default=os.environ.get("TRON_TRAINING_AUTH_TOKEN"),
+        help="X-TRON-AUTH token, required if the master was started with "
+             "TRON_TRAINING_AUTH_TOKEN set; defaults to that same env var so "
+             "one export covers both --master and any shard.py invocation",
+    )
     args = parser.parse_args(argv)
+    auth_headers = {"X-TRON-AUTH": args.auth_token} if args.auth_token else {}
 
     server_proc = None
     if args.master:
@@ -117,7 +125,7 @@ def main(argv=None) -> int:
             session_req["model_kind"] = "lora"
         sess = _with_retries(
             "create session",
-            lambda: requests.post(f"{base_url}/training/session", json=session_req, timeout=120),
+            lambda: requests.post(f"{base_url}/training/session", json=session_req, headers=auth_headers, timeout=120),
         ).json()
         session_id = sess["session_id"]
         kind = "LoRA adapters" if args.lora else "numpy vectors"
@@ -126,9 +134,12 @@ def main(argv=None) -> int:
         shard_timeout = 900 if args.lora else 180  # LoRA shards load Pythia first
         shard_procs = []
         for k in range(args.shards):
+            shard_cmd = [sys.executable, "-m", "tron.training.distributed.shard_worker",
+                         "--master", base_url, "--session", session_id, "--shard", str(k)]
+            if args.auth_token:
+                shard_cmd += ["--auth-token", args.auth_token]
             shard_procs.append(subprocess.Popen(
-                [sys.executable, "-m", "tron.training.distributed.shard_worker",
-                 "--master", base_url, "--session", session_id, "--shard", str(k)],
+                shard_cmd,
                 cwd=str(REPO_ROOT), env=_os_environ(),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             ))
@@ -143,7 +154,7 @@ def main(argv=None) -> int:
 
         result = _with_retries(
             "fetch result",
-            lambda: requests.get(f"{base_url}/training/session/{session_id}/result", timeout=120),
+            lambda: requests.get(f"{base_url}/training/session/{session_id}/result", headers=auth_headers, timeout=120),
         )
         if result.status_code != 200:
             print(f"[example] run did not finish (HTTP {result.status_code})")

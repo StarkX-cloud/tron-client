@@ -194,11 +194,27 @@ unit of compute spent (total local SGD steps) — readable at
   with tests that pin every number, not a batteries-included framework.
 - **Hardened for a hostile network, not just a flaky one.** The retry
   logic added above survives transient connection failures. It does not
-  add authentication between nodes, encryption above what HTTPS already
-  provides, or protection against a malicious participant sending
-  corrupt-but-well-formed data. The master is also a single process — one
-  Render dyno, one point of failure, no replication. All real gaps before
-  this is a system a telecom (or anyone) could run multi-tenant.
+  add encryption above what HTTPS already provides, or protection against
+  an authenticated-but-malicious participant sending corrupt-but-
+  well-formed data. The master is also a single process — one Render
+  dyno, one point of failure, no replication. Real gaps before this is a
+  system a telecom (or anyone) could run multi-tenant.
+- **Authentication, since fixed.** Until this same push, every
+  `/training/session*` route (and `/training/outcomes`) had zero access
+  control — anyone with the master's URL could create sessions (a LoRA
+  one loads a real base model — a resource-exhaustion vector) or submit
+  fabricated "trained" data as any shard, silently poisoning the merge.
+  `TRON_TRAINING_AUTH_TOKEN`, set on the master, now makes every one of
+  those routes require a matching `X-TRON-AUTH` header — fail-closed
+  when set, open only in the local-dev/test default with nothing
+  configured. Same fix applied to a related, pre-existing bug in
+  `/heartbeat`: it only checked the header *if the caller happened to
+  send one*, so omitting it entirely was a silent bypass. Both are now
+  fail-closed. `tests/test_training_auth.py` pins the guarded and
+  open-by-default behavior, including a full two-shard run driven
+  through an authenticated transport. What this is still not: encryption
+  of the data itself, or defense against a caller who has the token but
+  sends bad data on purpose.
 
 ---
 

@@ -17,24 +17,28 @@ def client(tmp_path, monkeypatch):
 
 
 def _register(tc, name):
-    assert tc.post("/register_worker", json={"name": name}).status_code == 200
+    resp = tc.post("/register_worker", json={"name": name})
+    assert resp.status_code == 200
+    return resp.json()["auth_token"]
 
 
-def _heartbeat(tc, name, latency_ms=None, bw=None):
+def _heartbeat(tc, name, token, latency_ms=None, bw=None):
+    # Fail-closed once a worker has a token (queue_server.py) — send the
+    # one issued at registration, same as a real worker.py client would.
     body = {"worker_name": name}
     if latency_ms is not None:
         body["latency_ms"] = latency_ms
     if bw is not None:
         body["bandwidth_mbps_down"] = bw
-    tc.post(f"/heartbeat/{name}", json=body)
+    tc.post(f"/heartbeat/{name}", json=body, headers={"X-TRON-AUTH": token})
 
 
 def test_whatif_is_a_noop_with_no_overrides(client):
     tc, _ = client
-    _register(tc, "a")
-    _register(tc, "b")
-    _heartbeat(tc, "a", latency_ms=5.0)
-    _heartbeat(tc, "b", latency_ms=300.0)
+    token_a = _register(tc, "a")
+    token_b = _register(tc, "b")
+    _heartbeat(tc, "a", token_a, latency_ms=5.0)
+    _heartbeat(tc, "b", token_b, latency_ms=300.0)
     tc.post("/submit", json={"function": "fn", "priority": 5, "compute_weight": 10})
 
     r = tc.post("/scheduler/whatif", json={"overrides": {}})
@@ -45,8 +49,8 @@ def test_whatif_is_a_noop_with_no_overrides(client):
 
 def test_whatif_does_not_touch_real_state(client):
     tc, qs = client
-    _register(tc, "a")
-    _heartbeat(tc, "a", latency_ms=5.0)
+    token = _register(tc, "a")
+    _heartbeat(tc, "a", token, latency_ms=5.0)
     r1 = tc.post("/submit", json={"function": "fn", "priority": 5})
     job_id = r1.json()["job_id"]
 
@@ -60,10 +64,10 @@ def test_whatif_does_not_touch_real_state(client):
 
 def test_whatif_reflects_the_matchers_scoring(client):
     tc, _ = client
-    _register(tc, "near")
-    _register(tc, "far")
-    _heartbeat(tc, "near", latency_ms=5.0)
-    _heartbeat(tc, "far", latency_ms=300.0)
+    token_near = _register(tc, "near")
+    token_far = _register(tc, "far")
+    _heartbeat(tc, "near", token_near, latency_ms=5.0)
+    _heartbeat(tc, "far", token_far, latency_ms=300.0)
     r = tc.post("/submit", json={"function": "fn", "priority": 5, "compute_weight": 10})
     job_id = r.json()["job_id"]
 
@@ -80,10 +84,10 @@ def test_whatif_reflects_the_matchers_scoring(client):
 
 def test_whatif_bandwidth_override_changes_a_heavy_transfer_placement(client):
     tc, _ = client
-    _register(tc, "fat")
-    _register(tc, "thin")
-    _heartbeat(tc, "fat", latency_ms=10.0, bw=100.0)
-    _heartbeat(tc, "thin", latency_ms=10.0, bw=5.0)
+    token_fat = _register(tc, "fat")
+    token_thin = _register(tc, "thin")
+    _heartbeat(tc, "fat", token_fat, latency_ms=10.0, bw=100.0)
+    _heartbeat(tc, "thin", token_thin, latency_ms=10.0, bw=5.0)
     r = tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 50_000_000})
     job_id = r.json()["job_id"]
 
@@ -97,8 +101,8 @@ def test_whatif_bandwidth_override_changes_a_heavy_transfer_placement(client):
 
 def test_whatif_with_empty_queue_returns_empty_assignments(client):
     tc, _ = client
-    _register(tc, "a")
-    _heartbeat(tc, "a", latency_ms=5.0)
+    token = _register(tc, "a")
+    _heartbeat(tc, "a", token, latency_ms=5.0)
     body = tc.post("/scheduler/whatif", json={"overrides": {"a": {"latency_ms": 1.0}}}).json()
     assert body["baseline"] == []
     assert body["hypothetical"] == []

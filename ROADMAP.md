@@ -377,6 +377,30 @@ technical design behind each phase.
   `node_ids` recorded correctly. See writeup/distributed-training.md's
   "Verified against a live public master" section for the real numbers
   (measured latency, failure rate, final accuracy). Explicitly not yet
-  done: auth between nodes, encryption beyond what HTTPS provides, and
-  the master is a single process with no replication — real gaps before
-  this could run multi-tenant.
+  done at that point: auth between nodes, encryption beyond what HTTPS
+  provides, and the master is a single process with no replication —
+  real gaps before this could run multi-tenant.
+- [x] Closed the auth gap above. Every `/training/session*` route and
+  `/training/outcomes` had zero access control — anyone with the
+  master's URL could create sessions (a LoRA one loads a real base
+  model, a resource-exhaustion vector) or submit fabricated "trained"
+  data as any shard. `TRON_TRAINING_AUTH_TOKEN`, set on the master, now
+  makes every one of those routes require a matching `X-TRON-AUTH`
+  header (`hmac.compare_digest`, fail-closed once set; open only when
+  unset, the local-dev/test default — every existing test and the
+  loopback example are unaffected). `RequestsTransport` and
+  `shard_worker.py --auth-token` already had the client-side plumbing;
+  `run_local.py` gained a matching `--auth-token` flag. Also fixed a
+  related, same-class bug found while in this code: `/heartbeat` only
+  checked the header *if the caller happened to send one*, so omitting
+  it entirely was a silent bypass — now fail-closed there too (all real
+  callers, i.e. `worker.py`, already always sent it). `render.yaml`
+  declares `TRON_TRAINING_AUTH_TOKEN` as a dashboard-set secret, not
+  committed. Tests: `tests/test_training_auth.py` (6 cases — open by
+  default, 401 with no/wrong token once configured, every route
+  individually guarded, and a full two-shard run driven end-to-end
+  through an authenticated transport).
+  Still not done: encryption of the payload itself (HTTPS covers
+  transport only), defense against an authenticated-but-malicious
+  participant, and the master remains a single process with no
+  replication.
