@@ -72,6 +72,15 @@ from tron.training.spine_integration import run_local_sgd_with_spine
 # tron/training/distributed/.
 from tron.training.distributed import TrainingSessionRegistry
 
+# TRON-II outcome tracking: score each finished training run by capability
+# gained per unit of compute spent, so tron/orchestrator/outcomes.py has a
+# real workload feeding it (it previously had none — see ROADMAP.md).
+try:
+    from tron.orchestrator.outcomes import OutcomeLog
+    HAS_OUTCOMES = True
+except Exception:
+    HAS_OUTCOMES = False
+
 # =========================
 # ORCHESTRATOR & GPU IMPORTS
 # =========================
@@ -151,6 +160,10 @@ topology = TopologyMap()
 # path). Backed by the same event_log / artifact_store as everything else,
 # so a distributed run's Tasks land in the same spine the Grid replays.
 training_sessions = TrainingSessionRegistry()
+
+# Persisted alongside the spine; each finished training session appends one
+# TrainingOutcome (accuracy delta vs. untrained init, over total local steps).
+training_outcomes = OutcomeLog(storage_path=str(_SPINE_DIR / "outcomes.json")) if HAS_OUTCOMES else None
 
 global_brain = GlobalDecisionBrain(topology, swarm, load_shaper)
 
@@ -667,6 +680,7 @@ def create_training_session(payload: dict = None):
         dataset_config=payload.get("dataset_config"),
         skew=float(payload.get("skew", 0.9)),
         shard_seed=int(payload.get("shard_seed", 1)),
+        outcome_log=training_outcomes,
     )
     out = session.status()
     out["model_config"] = session.model_config
@@ -714,6 +728,25 @@ def get_training_result(session_id: str):
         from fastapi.responses import Response
         return Response(status_code=202)
     return res
+
+
+@app.get("/training/outcomes")
+def get_training_outcomes():
+    """Every finished training run scored by capability gained (held-out
+    accuracy delta vs. the untrained shared init) per unit of compute
+    spent (total local SGD steps). Feeds tron/orchestrator/outcomes.py."""
+    if training_outcomes is None:
+        return {"outcomes": [], "note": "tron.orchestrator.outcomes unavailable"}
+    outcomes = [o.to_dict() for o in training_outcomes.outcomes]
+    for o in outcomes:
+        gain, cost = o["actual_capability_gain"], o["actual_cost"]
+        o["capability_per_compute"] = (gain / cost) if cost else 0.0
+    return {
+        "outcomes": outcomes,
+        "count": len(outcomes),
+        "total_capability_gain": sum(o["actual_capability_gain"] for o in outcomes),
+        "total_compute": sum(o["actual_cost"] for o in outcomes),
+    }
 
 
 # =========================

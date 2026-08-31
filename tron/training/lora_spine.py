@@ -25,6 +25,7 @@ final adapter tensor-for-tensor.
 from __future__ import annotations
 
 import io
+from datetime import datetime, timezone
 from typing import Optional
 
 import torch
@@ -72,6 +73,8 @@ def run_local_sgd_lora_with_spine(
     artifact_store: ArtifactStore,
     seed: int = 0,
     node_ids: Optional[list] = None,
+    outcome_log=None,
+    run_name: str = "lora-local-sgd",
 ) -> dict:
     """Same computation as lora_demo.run_local_sgd_lora, plus recording
     every shard's per-round adapter training into the spine.
@@ -145,6 +148,27 @@ def run_local_sgd_lora_with_spine(
         round_init_hash = artifact_store.put(encode_adapter_state(averaged)).artifact_id
 
     eval_after = evaluate_loss(models[0], held_out_blocks)
+
+    if outcome_log is not None:
+        # capability gained = eval-loss reduction; compute spent = total
+        # local steps across shards. Feeds tron/orchestrator/outcomes.py.
+        gain = float(eval_before - eval_after)
+        cost = float(num_rounds * len(shards) * local_steps)
+        try:
+            from tron.orchestrator.outcomes import TrainingOutcome
+            outcome_log.record(TrainingOutcome(
+                artifact_id=round_init_hash,  # last merged adapter
+                adapter_name=run_name,
+                module_id="lora-local-sgd",
+                expected_capability_gain=gain,
+                actual_capability_gain=gain,
+                expected_cost=cost,
+                actual_cost=cost,
+                success=gain > 0.0,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ))
+        except Exception:
+            pass
 
     return {
         "eval_loss_before": eval_before,

@@ -158,6 +158,34 @@ def test_output_artifacts_are_retrievable_adapter_state_dicts(spine):
         assert any("lora_A" in k for k in state)
 
 
+def test_records_a_training_outcome_when_given_an_outcome_log(spine):
+    from tron.orchestrator.outcomes import OutcomeLog
+
+    log, store = spine
+    olog = OutcomeLog()
+    result = run_local_sgd_lora_with_spine(
+        _base_model(), _shards(), _held_out(),
+        num_rounds=2, local_steps=3, lr=1e-3, event_log=log, artifact_store=store, seed=5,
+        outcome_log=olog, run_name="unit-lora",
+    )
+    assert len(olog.outcomes) == 1
+    o = olog.outcomes[0]
+    assert o.adapter_name == "unit-lora"
+    assert o.module_id == "lora-local-sgd"
+    assert o.actual_cost == 2 * 2 * 3  # rounds * shards * local_steps
+    # gain is the eval-loss reduction
+    assert o.actual_capability_gain == pytest.approx(result["eval_loss_before"] - result["eval_loss_after"])
+
+
+def test_no_outcome_log_means_no_recording(spine):
+    log, store = spine
+    # just asserting it doesn't raise without an outcome_log
+    run_local_sgd_lora_with_spine(
+        _base_model(), _shards(), _held_out(),
+        num_rounds=1, local_steps=2, lr=1e-3, event_log=log, artifact_store=store, seed=5,
+    )
+
+
 def test_task_metadata_records_round_shard_and_model_sizes(spine):
     log, store = spine
     run_local_sgd_lora_with_spine(

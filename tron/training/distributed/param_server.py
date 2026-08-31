@@ -23,6 +23,7 @@ bit-for-bit parity guarantee.
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timezone
 from typing import Optional
 
 from tron.spine import ArtifactStore, EventLog, Task
@@ -56,6 +57,7 @@ class TrainingSession:
         dataset_config: Optional[dict] = None,
         skew: float = 0.9,
         shard_seed: int = 1,
+        outcome_log=None,
     ):
         if model_kind != "numpy_mlp":
             raise ValueError(f"unsupported model_kind: {model_kind!r}")
@@ -72,6 +74,12 @@ class TrainingSession:
         self.dataset_config = dict(dataset_config or {})
         self._log = event_log
         self._store = artifact_store
+        # Optional tron.orchestrator.outcomes.OutcomeLog — when the last
+        # round merges, this run's capability-gained-per-compute-spent is
+        # recorded there, closing the "outcomes.py has no real workload
+        # feeding it" gap from ROADMAP.md.
+        self._outcome_log = outcome_log
+        self._outcome_recorded = False
         self._lock = threading.Lock()
 
         self._build_problem(skew=skew, shard_seed=shard_seed)
@@ -124,9 +132,13 @@ class TrainingSession:
         # Shared init = a fresh model's flat params, same as
         # local_sgd._shared_init_replicas. Deterministic from model_config,
         # but stored + transmitted so the wire path is real.
-        init_vec = self._new_model().get_flat_params()
+        init_model = self._new_model()
+        init_vec = init_model.get_flat_params()
         self._shared_init_hash = self._store.put(encode_vector(init_vec)).artifact_id
         self._num_params = init_vec.size
+        # held-out accuracy of the untrained shared init — the baseline the
+        # run's capability gain is measured against
+        self._accuracy_before = init_model.accuracy(self._x_test, self._y_test)
 
         self._fn_hash = self._store.put(_ROUND_FN_TAG).artifact_id
 
@@ -242,6 +254,8 @@ class TrainingSession:
                 self._merged[round_idx] = merged_hash
                 if round_idx + 1 < self.num_rounds:
                     self._round_init[round_idx + 1] = merged_hash
+                elif round_idx + 1 == self.num_rounds:
+                    self._record_outcome(merged_bytes, merged_hash)
 
         return {
             "session_id": self.session_id,
@@ -250,6 +264,38 @@ class TrainingSession:
             "round_complete": round_complete,
             "rounds_merged": sorted(self._merged),
         }
+
+    def _record_outcome(self, merged_bytes: bytes, merged_hash: str) -> None:
+        """Called once, when the final round merges: score this run's
+        capability gained (held-out accuracy delta vs. the untrained
+        shared init) against the compute it spent (total local SGD steps
+        across all shards), and hand it to the OutcomeLog if one was
+        provided. This is real workload feeding tron/orchestrator/
+        outcomes.py, which previously had none."""
+        if self._outcome_log is None or self._outcome_recorded:
+            return
+        model = self._new_model()
+        model.set_flat_params(decode_vector(merged_bytes))
+        accuracy_after = model.accuracy(self._x_test, self._y_test)
+        gain = accuracy_after - self._accuracy_before
+        cost = float(self.num_rounds * self.num_shards * self.local_steps)  # total local steps
+        try:
+            from tron.orchestrator.outcomes import TrainingOutcome
+            self._outcome_log.record(TrainingOutcome(
+                artifact_id=merged_hash,
+                adapter_name=self.session_id,
+                module_id=f"distributed-{self.model_kind}",
+                expected_capability_gain=gain,   # no separate prediction was made
+                actual_capability_gain=gain,
+                expected_cost=cost,
+                actual_cost=cost,
+                success=gain > 0.0,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ))
+            self._outcome_recorded = True
+        except Exception:
+            # outcome recording must never break a training run
+            pass
 
     # -- status / result ------------------------------------------------
 
@@ -268,6 +314,7 @@ class TrainingSession:
                 "wire_bytes_transferred": self._wire_bytes,
                 "algorithmic_comm_bytes": self.num_rounds * self.num_shards
                 * self._num_params * _BYTES_PER_FLOAT64,
+                "accuracy_before": self._accuracy_before,
             }
 
     def final_vector_bytes(self) -> Optional[bytes]:
