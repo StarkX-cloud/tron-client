@@ -45,7 +45,7 @@ tested elsewhere in this repo.
 
     python -m examples.telecom_demo.run_cell_tower_demo --master https://<your-master>
 
-## Real numbers, from a local run (loopback)
+## Real numbers
 
 | | |
 |---|---|
@@ -57,13 +57,19 @@ tested elsewhere in this repo.
 | one-time cost of centralizing the raw readings instead | 89,600 |
 | **per-round saving vs. shipping raw data once** | **7.8x less** |
 
-(A run against the live deployed WAN master — same Render instance
-`writeup/distributed-training.md`'s validation used — is pending as of
-this writing: the first attempt against it ran before this code was
-pushed and redeployed, so the master silently used its old default
-dataset instead of the telecom one — a real, honest catch, not a result
-to report. Numbers above are the loopback run; this section gets updated
-once a genuine post-redeploy WAN run is captured.)
+Verified twice: once locally (loopback), and once for real against the
+live deployed WAN master (`tron-master-5184.onrender.com` — same Render
+instance `writeup/distributed-training.md`'s WAN validation used, real
+public internet). Both runs produced identical numbers — the dataset
+generation is deterministic, so that match is itself a small honest
+confirmation nothing about the network path silently changed the result.
+
+(The first attempt against the WAN master actually ran *before* this
+code had been pushed and redeployed there — it silently trained on the
+master's old default dataset instead of erroring, because an
+unrecognized `problem` field is ignored, not rejected. That run's
+numbers were never reported; this section reflects the correct
+post-redeploy run only.)
 
 That per-round number, not a cumulative one, is the honest claim. At this
 toy model size, running enough rounds makes the *cumulative* wire bytes
