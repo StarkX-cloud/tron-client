@@ -17,3 +17,9 @@ services:
       - key: TRON_TRAINING_AUTH_TOKEN
         sync: false  # set in the Render dashboard, not committed — required
                      # to lock down /training/session*; unset = open (dev default)
+      - key: TRON_ARTIFACT_ENCRYPTION_KEY
+        sync: false  # set in the Render dashboard, not committed — a Fernet
+                     # key (generate: python -c "from cryptography.fernet
+                     # import Fernet; print(Fernet.generate_key().decode())")
+                     # encrypting every artifact at rest; unset = plaintext
+                     # on disk (dev default)

@@ -4,3 +4,4 @@ pydantic>=2.0.0,<2.5
 requests==2.32.0
 cloudpickle==3.0.0
 scipy>=1.11.0
+cryptography>=42.0.0

@@ -82,6 +82,81 @@ def test_store_verify_false_for_missing(store):
 
 
 # ---------------------------------------------------------------------------
+# ArtifactStore: at-rest encryption (TRON_ARTIFACT_ENCRYPTION_KEY)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def fernet_key():
+    from cryptography.fernet import Fernet
+    return Fernet.generate_key().decode()
+
+
+@pytest.fixture
+def encrypted_store(tmp_path, fernet_key):
+    return ArtifactStore(root=tmp_path / "artifacts", encryption_key=fernet_key)
+
+
+def test_encrypted_store_roundtrip(encrypted_store):
+    artifact = encrypted_store.put(b"some secret bytes")
+    assert encrypted_store.get(artifact.artifact_id) == b"some secret bytes"
+
+
+def test_encrypted_store_artifact_id_matches_plaintext_content_hash(encrypted_store):
+    """Encryption must be invisible to content-addressing: the id is
+    always the hash of the plaintext, on or off, so nothing that
+    references an artifact by hash (which is everything) has to care."""
+    artifact = encrypted_store.put(b"some secret bytes")
+    assert artifact.artifact_id == content_hash(b"some secret bytes")
+
+
+def test_encrypted_store_bytes_on_disk_are_not_plaintext(tmp_path, fernet_key):
+    store = ArtifactStore(root=tmp_path / "artifacts", encryption_key=fernet_key)
+    artifact = store.put(b"this must not appear verbatim on disk")
+    raw_on_disk = (tmp_path / "artifacts" / artifact.artifact_id[:2] / artifact.artifact_id).read_bytes()
+    assert b"this must not appear verbatim on disk" not in raw_on_disk
+
+
+def test_encrypted_store_wrong_key_cannot_read_another_stores_data(tmp_path, fernet_key):
+    from cryptography.fernet import Fernet, InvalidToken
+
+    writer = ArtifactStore(root=tmp_path / "artifacts", encryption_key=fernet_key)
+    artifact = writer.put(b"only readable with the right key")
+
+    wrong_key = Fernet.generate_key().decode()
+    reader = ArtifactStore(root=tmp_path / "artifacts", encryption_key=wrong_key)
+    with pytest.raises(InvalidToken):
+        reader.get(artifact.artifact_id)
+    assert reader.verify(artifact.artifact_id) is False
+
+
+def test_enabling_encryption_on_an_existing_store_still_reads_old_plaintext(tmp_path, fernet_key):
+    """A real, expected case: turning on TRON_ARTIFACT_ENCRYPTION_KEY on a
+    deployment that already has artifacts on disk doesn't retroactively
+    encrypt them. Old data must still be readable, not treated as
+    corrupted just because the key doesn't "open" it — it was never
+    locked in the first place."""
+    plain_store = ArtifactStore(root=tmp_path / "artifacts")
+    artifact = plain_store.put(b"written before encryption was ever turned on")
+
+    now_encrypted = ArtifactStore(root=tmp_path / "artifacts", encryption_key=fernet_key)
+    assert now_encrypted.get(artifact.artifact_id) == b"written before encryption was ever turned on"
+    assert now_encrypted.verify(artifact.artifact_id) is True
+
+    # and a fresh write through the now-encrypted store really is encrypted
+    new_artifact = now_encrypted.put(b"written after encryption was turned on")
+    raw_on_disk = (tmp_path / "artifacts" / new_artifact.artifact_id[:2] / new_artifact.artifact_id).read_bytes()
+    assert b"written after encryption was turned on" not in raw_on_disk
+
+
+def test_no_key_behaves_exactly_as_before(store):
+    """The default (no TRON_ARTIFACT_ENCRYPTION_KEY) is unchanged
+    plaintext-on-disk — every existing test and deployment is unaffected."""
+    artifact = store.put(b"plaintext by default")
+    raw_on_disk = (store.root / artifact.artifact_id[:2] / artifact.artifact_id).read_bytes()
+    assert raw_on_disk == b"plaintext by default"
+
+
+# ---------------------------------------------------------------------------
 # EventLog: append + replay
 # ---------------------------------------------------------------------------
 
