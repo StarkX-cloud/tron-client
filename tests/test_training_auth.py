@@ -65,6 +65,34 @@ def test_secret_configured_wrong_token_is_401(guarded_client):
     assert resp.status_code == 401
 
 
+def test_secret_configured_plain_http_is_rejected_even_with_correct_token(guarded_client):
+    """The token protects nothing if it can be read off the wire in
+    cleartext. X-Forwarded-Proto: http is what a TLS-terminating proxy
+    (Render's edge, or any reverse proxy) sets to say the original
+    request wasn't HTTPS."""
+    tc, _ = guarded_client
+    resp = _create_session(
+        tc, headers={"X-TRON-AUTH": "correct-horse-battery-staple", "X-Forwarded-Proto": "http"}
+    )
+    assert resp.status_code == 400
+
+
+def test_secret_configured_no_forwarded_proto_header_behaves_as_before(guarded_client):
+    """Local dev / loopback / TestClient requests carry no
+    X-Forwarded-Proto at all — must not be treated as "http"."""
+    tc, _ = guarded_client
+    resp = _create_session(tc, headers={"X-TRON-AUTH": "correct-horse-battery-staple"})
+    assert resp.status_code == 200
+
+
+def test_secret_configured_forwarded_proto_https_is_fine(guarded_client):
+    tc, _ = guarded_client
+    resp = _create_session(
+        tc, headers={"X-TRON-AUTH": "correct-horse-battery-staple", "X-Forwarded-Proto": "https"}
+    )
+    assert resp.status_code == 200
+
+
 def test_secret_configured_correct_token_succeeds(guarded_client):
     tc, _ = guarded_client
     headers = {"X-TRON-AUTH": "correct-horse-battery-staple"}

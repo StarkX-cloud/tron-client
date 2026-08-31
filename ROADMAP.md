@@ -400,7 +400,37 @@ technical design behind each phase.
   default, 401 with no/wrong token once configured, every route
   individually guarded, and a full two-shard run driven end-to-end
   through an authenticated transport).
-  Still not done: encryption of the payload itself (HTTPS covers
-  transport only), defense against an authenticated-but-malicious
+  Still not done at that point: encryption of the payload itself (HTTPS
+  covers transport only), defense against an authenticated-but-malicious
   participant, and the master remains a single process with no
   replication.
+- [x] Closed the at-rest encryption gap above.
+  `TRON_ARTIFACT_ENCRYPTION_KEY` (a Fernet key) now encrypts every
+  artifact — training vectors, adapter states, shard data — before it
+  touches disk (`tron/spine/store.py`). Content-addressing-transparent by
+  construction: `artifact_id` is always `content_hash` of the plaintext,
+  computed before encryption and checked after decryption, so nothing
+  that references an artifact by hash changes behavior whether encryption
+  is on or off. Enabling it on a store that already has plaintext
+  artifacts doesn't retroactively encrypt them — reading old data still
+  works (the store can tell the two cases apart honestly: if the raw
+  on-disk bytes already hash to the requested id, they're pre-encryption
+  plaintext, not corrupted). Also fixed the matching gap in the auth
+  token itself: `_require_training_auth` now refuses a request carrying
+  `X-Forwarded-Proto: http` (the standard signal a TLS-terminating proxy
+  sets) even with a correct `X-TRON-AUTH` token — a secret that can still
+  cross the wire in cleartext isn't meaningfully protected. `render.yaml`
+  declares `TRON_ARTIFACT_ENCRYPTION_KEY` as a dashboard-set secret, not
+  committed, same as the auth token. Tests: 6 new cases in
+  `tests/test_spine.py` (roundtrip, artifact_id unaffected by encryption,
+  ciphertext really isn't plaintext on disk, wrong key can't decrypt,
+  enabling encryption on an existing plaintext store still reads old
+  data, unset key behaves exactly as before) + 3 new cases in
+  `tests/test_training_auth.py` (plain-HTTP rejected even with the right
+  token, no X-Forwarded-Proto header behaves as before, https is fine).
+  Still not done: this does not hide data *from the master itself* — it
+  genuinely has to read each shard's plaintext vector to average it, so
+  true end-to-end confidentiality would need secure aggregation (a much
+  larger, different feature) — and it does not defend against a caller
+  who holds a valid token but sends bad data on purpose. The master also
+  still remains a single process with no replication.

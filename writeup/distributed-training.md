@@ -212,9 +212,34 @@ unit of compute spent (total local SGD steps) — readable at
   send one*, so omitting it entirely was a silent bypass. Both are now
   fail-closed. `tests/test_training_auth.py` pins the guarded and
   open-by-default behavior, including a full two-shard run driven
-  through an authenticated transport. What this is still not: encryption
-  of the data itself, or defense against a caller who has the token but
-  sends bad data on purpose.
+  through an authenticated transport. What this is still not: defense
+  against a caller who has the token but sends bad data on purpose.
+- **At-rest encryption, since added.** Auth controls who can submit or
+  fetch an artifact over the wire; it says nothing about someone who
+  gets at the master's disk directly — a stolen backup, a misconfigured
+  bucket, a curious host provider. Every training vector and adapter sat
+  there in plaintext. `TRON_ARTIFACT_ENCRYPTION_KEY` now encrypts every
+  artifact at rest (Fernet/AES via the `cryptography` package), invisible
+  to content-addressing: `artifact_id` is always the hash of the
+  *plaintext*, computed before encryption and checked after decryption,
+  so nothing that references an artifact by hash has to know or care
+  whether encryption is on. Enabling it on a deployment that already has
+  artifacts on disk doesn't retroactively encrypt them, and old plaintext
+  is still readable rather than treated as corrupted — the store can tell
+  the difference honestly because content-addressing means it can check
+  whether the raw bytes on disk already hash to the id being asked for.
+  Also: a request presenting a valid `X-TRON-AUTH` token over plain HTTP
+  (detected via `X-Forwarded-Proto: http`, the standard signal a
+  TLS-terminating proxy sets) is now refused outright — the token itself
+  is a secret, and no encryption story is complete while it can still
+  cross the wire in cleartext. `tests/test_spine.py` (6 new cases) and
+  `tests/test_training_auth.py` (3 new cases) pin both.
+  Still not done: this does not hide data *from the master itself* — the
+  master genuinely has to read each shard's plaintext vector to average
+  it, so true end-to-end confidentiality would need secure aggregation
+  (a much larger, different feature, not attempted here) — and it does
+  not defend against a caller who holds a valid token but sends bad data
+  on purpose.
 
 ---
 

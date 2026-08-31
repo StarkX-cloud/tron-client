@@ -154,7 +154,14 @@ load_shaper = LoadShaper()
 # one) — it's specifically a test-isolation footgun otherwise.
 _SPINE_DIR = Path(os.environ.get("TRON_SPINE_DIR", ".tron_spine"))
 event_log = EventLog(path=_SPINE_DIR / "log.db")
-artifact_store = ArtifactStore(root=_SPINE_DIR / "artifacts")
+# TRON_ARTIFACT_ENCRYPTION_KEY (a Fernet key — see store.py's docstring for
+# why this exists and what it does and doesn't protect) encrypts every
+# artifact at rest: training vectors, adapter states, shard data. Unset
+# means plaintext on disk, same as before this existed.
+artifact_store = ArtifactStore(
+    root=_SPINE_DIR / "artifacts",
+    encryption_key=os.environ.get("TRON_ARTIFACT_ENCRYPTION_KEY") or None,
+)
 topology = TopologyMap()
 
 # Registry of over-the-wire distributed training sessions (Phase 3 wire
@@ -180,9 +187,29 @@ def _require_training_auth(request: Request) -> None:
     /training/outcomes route. Fail-CLOSED when a secret is configured: a
     missing or wrong header is always a 401, never silently let through
     because the caller happened to omit the header — that's the exact bug
-    fixed in /heartbeat below, and it would be no less real here."""
+    fixed in /heartbeat below, and it would be no less real here.
+
+    Also refuses a request that arrived over plain HTTP. TLS is normally
+    terminated in front of this process (Render's edge, or any reverse
+    proxy) — the process itself only ever sees plain HTTP internally — so
+    the standard signal for "what scheme did the original client actually
+    use" is the `X-Forwarded-Proto` header the proxy sets. If it's present
+    and says "http", the secret this whole check exists to protect just
+    crossed the public leg of the connection in cleartext; letting the
+    request through anyway would make the auth token itself the weak
+    point. Only enforced when that header is present and explicitly says
+    http — a bare loopback request in local dev/tests carries no such
+    header at all and is unaffected.
+    """
     if not TRAINING_AUTH_TOKEN:
         return
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    if forwarded_proto.split(",")[0].strip().lower() == "http":
+        raise HTTPException(
+            status_code=400,
+            detail="refusing to check X-TRON-AUTH over plain HTTP (X-Forwarded-Proto: http) "
+                   "— the token would cross the wire in cleartext; use HTTPS",
+        )
     supplied = request.headers.get("X-TRON-AUTH")
     if not supplied or not hmac.compare_digest(supplied, TRAINING_AUTH_TOKEN):
         raise HTTPException(status_code=401, detail="missing or invalid X-TRON-AUTH token")
