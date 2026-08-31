@@ -58,6 +58,7 @@ class TrainingSession:
         skew: float = 0.9,
         shard_seed: int = 1,
         outcome_log=None,
+        dataset_factory=None,
     ):
         if model_kind != "numpy_mlp":
             raise ValueError(f"unsupported model_kind: {model_kind!r}")
@@ -81,6 +82,15 @@ class TrainingSession:
         self._outcome_log = outcome_log
         self._outcome_recorded = False
         self._lock = threading.Lock()
+        # Optional swap-in for what problem this session trains on. Signature:
+        # (*, num_shards: int, dataset_config: dict) -> (shards, x_test,
+        # y_test, num_features, num_classes) — the same shape
+        # _build_problem's default (Gaussian-blob classification) path
+        # produces below, so the wire protocol, spine recording, and outcome
+        # scoring don't know or care which problem is running. Default is
+        # None: the original pinned classification benchmark is completely
+        # untouched by this hook's existence.
+        self._dataset_factory = dataset_factory
 
         self._build_problem(skew=skew, shard_seed=shard_seed)
 
@@ -104,6 +114,19 @@ class TrainingSession:
 
     def _build_problem(self, *, skew: float, shard_seed: int) -> None:
         cfg = self.dataset_config
+
+        if self._dataset_factory is not None:
+            shards, x_test, y_test, num_features, num_classes = self._dataset_factory(
+                num_shards=self.num_shards, dataset_config=cfg,
+            )
+            self._x_test, self._y_test = x_test, y_test
+            self.model_config.setdefault("input_dim", num_features)
+            self.model_config.setdefault("hidden_dim", 16)
+            self.model_config.setdefault("num_classes", num_classes)
+            self.model_config.setdefault("seed", 42)
+            self._finish_build_problem(shards)
+            return
+
         num_features = int(cfg.get("num_features", 8))
         num_classes = int(cfg.get("num_classes", 4))
         x_all, y_all = make_classification_dataset(
@@ -128,6 +151,12 @@ class TrainingSession:
         self.model_config.setdefault("num_classes", num_classes)
         self.model_config.setdefault("seed", 42)
 
+        self._finish_build_problem(shards)
+
+    def _finish_build_problem(self, shards) -> None:
+        """Shared tail of _build_problem, regardless of which problem
+        (default Gaussian-blob classification, or a dataset_factory swap-
+        in) produced `shards` and self._x_test/_y_test/model_config."""
         # Shard data -> Artifacts (the shard downloads these real bytes).
         self._shard_data_hashes: list[str] = []
         for x, y in shards:
