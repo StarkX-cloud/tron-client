@@ -128,6 +128,13 @@ bytes that **actually crossed a socket** (upload + download legs) and the
 conceptual "one sync per shard per round" figure the in-process metric
 counts.
 
+`run_local.py --lora` runs the **same transport carrying LoRA adapters**:
+each round's POST body is a ~400KB adapter state dict, the ~282MB
+Pythia-70M base never moves (every shard process loads its own frozen
+copy), and `tests/test_lora_over_wire.py` pins the merged adapter
+tensor-for-tensor against the single-process run. That is the low-rank
+delta thesis and the real-socket work in one demonstration.
+
 Each finished run is also scored into `tron/orchestrator/outcomes.py` —
 capability gained (held-out accuracy delta vs. the untrained init) per
 unit of compute spent (total local SGD steps) — readable at
@@ -142,12 +149,13 @@ unit of compute spent (total local SGD steps) — readable at
   ~1MB corpus for a few dozen steps. Neither is a frontier-scale training
   run. The goal was to implement and verify the *algorithms* correctly at
   a size anyone can rerun and check in minutes.
-- **LoRA over the real wire.** The numpy MLP runs across separate
-  processes today. The LoRA path records adapters into the spine and has
-  the serialization helpers (`lora_spine.encode_adapter_state`), but
-  still trains in one process — wiring adapters through the
-  `tron/training/distributed/` transport is the remaining "real model
-  over a real network" combination.
+- ~~LoRA over the real wire.~~ **Done.** `distributed/lora_wire.py` +
+  `LoraTrainingSession` send the LoRA adapter state dict (~400KB) as each
+  round's POST body over the same transport; the ~282MB base model never
+  moves. `run_local.py --lora` runs it against real Pythia-70M, and
+  `tests/test_lora_over_wire.py` pins the merged adapter tensor-for-tensor
+  against the single-process run. What's still not claimed here is
+  *scale* — it's Pythia-70M with a rank-8 adapter, not a frontier model.
 - **A production training system.** This is a demonstration of mechanism,
   with tests that pin every number, not a batteries-included framework.
 

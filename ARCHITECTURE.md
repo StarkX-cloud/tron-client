@@ -116,9 +116,18 @@ round, and serves the merge back for the next round.
 `fastapi.testclient` and asserts the final model is **bit-for-bit
 identical** to the single-process `train_local_sgd` — the transport
 changes where the bytes go, not what they are. Running across genuinely
-separate machines is then just a different `--master` URL. This is the
-numpy MLP; wiring the LoRA path through the same transport is still open
-(see ROADMAP.md).
+separate machines is then just a different `--master` URL.
+
+**LoRA over the same wire.** `distributed/lora_wire.py` +
+`lora_param_server.LoraTrainingSession` carry the LoRA path over this
+transport: the round's POST body is a LoRA **adapter state dict**
+(~400KB for Pythia-70M), and the ~282MB base model never moves — every
+node loads its own frozen copy, which is exactly the "low-rank delta is
+the unit of communication" case. `POST /training/session` with
+`model_kind: "lora"` selects it; `run_local.py --lora` runs it across
+subprocesses against real Pythia-70M.
+`tests/test_lora_over_wire.py` holds the merged adapter tensor-for-tensor
+against the single-process `lora_demo.run_local_sgd_lora`.
 
 **Phase 3 scale-up — the same story on a real pretrained model.**
 `tron/training/lora_demo.py` / `benchmark_lora.py` run the identical

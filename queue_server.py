@@ -662,26 +662,75 @@ def _bad_request_on_valueerror(fn, *args, **kwargs):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+# Base models for over-the-wire LoRA sessions are loaded once per name and
+# shared (make_lora_model deepcopies the frozen base, so sharing is safe).
+_lora_base_cache: dict = {}
+
+
+def _lora_base_factory(model_name: str):
+    def factory():
+        if model_name not in _lora_base_cache:
+            from tron.training.lora_demo import load_base_model_and_tokenizer
+            _lora_base_cache[model_name] = load_base_model_and_tokenizer(model_name)[0]
+        return _lora_base_cache[model_name]
+    return factory
+
+
 @app.post("/training/session")
 def create_training_session(payload: dict = None):
     payload = payload or {}
     session_id = payload.get("session_id") or f"trainsess-{uuid.uuid4().hex[:12]}"
-    session = _bad_request_on_valueerror(
-        training_sessions.create,
-        session_id,
-        num_shards=int(payload.get("num_shards", 4)),
-        num_rounds=int(payload.get("num_rounds", 6)),
-        local_steps=int(payload.get("local_steps", 10)),
-        lr=float(payload.get("lr", 0.3)),
-        event_log=event_log,
-        artifact_store=artifact_store,
-        model_kind=payload.get("model_kind", "numpy_mlp"),
-        model_config=payload.get("model_config"),
-        dataset_config=payload.get("dataset_config"),
-        skew=float(payload.get("skew", 0.9)),
-        shard_seed=int(payload.get("shard_seed", 1)),
-        outcome_log=training_outcomes,
-    )
+    model_kind = payload.get("model_kind", "numpy_mlp")
+
+    if model_kind == "lora":
+        # LoRA over the same wire transport: the unit crossing the socket
+        # is an adapter state dict (~KB), not a numpy vector. torch etc.
+        # are only needed here, so the import is local and a missing
+        # extra is a 400, not a boot failure.
+        try:
+            from tron.training.distributed.lora_param_server import LoraTrainingSession
+        except Exception as exc:  # noqa: BLE001
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail=f"LoRA training extras unavailable: {exc}")
+        mc = payload.get("model_config") or {}
+        model_name = mc.get("model_name", "EleutherAI/pythia-70m")
+        session = _bad_request_on_valueerror(
+            LoraTrainingSession,
+            session_id,
+            base_model_factory=_lora_base_factory(model_name),
+            num_shards=int(payload.get("num_shards", 3)),
+            num_rounds=int(payload.get("num_rounds", 4)),
+            local_steps=int(payload.get("local_steps", 5)),
+            lr=float(payload.get("lr", 5e-4)),
+            event_log=event_log,
+            artifact_store=artifact_store,
+            model_name=model_name,
+            seq_len=int(mc.get("seq_len", 64)),
+            seed=int(payload.get("seed", 0)),
+            # tests can pass a token-id list here to skip the tokenizer;
+            # a .txt path also works; omit for the vendored corpus.
+            corpus_path=mc.get("token_ids") or mc.get("corpus_path"),
+            outcome_log=training_outcomes,
+        )
+        training_sessions.register(session_id, session)
+    else:
+        session = _bad_request_on_valueerror(
+            training_sessions.create,
+            session_id,
+            num_shards=int(payload.get("num_shards", 4)),
+            num_rounds=int(payload.get("num_rounds", 6)),
+            local_steps=int(payload.get("local_steps", 10)),
+            lr=float(payload.get("lr", 0.3)),
+            event_log=event_log,
+            artifact_store=artifact_store,
+            model_kind=model_kind,
+            model_config=payload.get("model_config"),
+            dataset_config=payload.get("dataset_config"),
+            skew=float(payload.get("skew", 0.9)),
+            shard_seed=int(payload.get("shard_seed", 1)),
+            outcome_log=training_outcomes,
+        )
+
     out = session.status()
     out["model_config"] = session.model_config
     return out

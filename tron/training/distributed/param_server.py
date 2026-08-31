@@ -354,6 +354,12 @@ class TrainingSessionRegistry:
             self._sessions[session_id] = session
         return session
 
+    def register(self, session_id: str, session) -> None:
+        """Store a pre-built session (e.g. a LoraTrainingSession, which has
+        the same shard-facing method surface but a different constructor)."""
+        with self._lock:
+            self._sessions[session_id] = session
+
     def get(self, session_id: str) -> Optional[TrainingSession]:
         with self._lock:
             return self._sessions.get(session_id)

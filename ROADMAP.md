@@ -129,10 +129,30 @@ technical design behind each phase.
         leg that actually crossed a socket) and `algorithmic_comm_bytes`
         (the conceptual one-sync-per-shard figure the in-process metric
         counts) so the comparison stays honest.
-    - [ ] Still open here: this is the **numpy MLP** over the wire. The
-          LoRA / Pythia-70M path isn't wired through this transport yet
-          (see the Phase 3 scale-up section) — that's the "real model
-          over a real network" combination.
+    - [x] **LoRA over the same wire.** `tron/training/distributed/
+          lora_wire.py` + `lora_param_server.LoraTrainingSession`: the
+          unit crossing the socket each round is a LoRA **adapter state
+          dict** (~400KB for Pythia-70M), not a numpy vector and never
+          the ~282MB base model — the base is assumed present on every
+          node (`shard_worker` loads it locally; only the adapter is
+          transmitted). `POST /training/session` with
+          `model_kind: "lora"` dispatches to this path;
+          `run_local.py --lora` runs it across real subprocesses.
+          Same parity bar as the numpy path:
+          `tests/test_lora_over_wire.py` drives the full HTTP path with
+          one thread per shard and asserts the final merged adapter is
+          **tensor-for-tensor identical** to
+          `lora_demo.run_local_sgd_lora` in one process (long-lived
+          optimizer across rounds included). 5 tests. Verified end to end
+          against **real Pythia-70M** via `run_local.py --lora` (2 shards,
+          3 rounds x 3 steps): eval loss 4.3296 -> 4.2641; adapter
+          393,216 B vs. the full model's 282,099,712 B (**717x**);
+          **4,718,592 bytes actually sent over sockets** — the 282MB base
+          never moved. (The example's launcher sets
+          `KMP_DUPLICATE_LIB_OK` + single-digit BLAS threads so several
+          torch processes loading a model on one Windows box don't crash
+          on duplicate OpenMP runtimes — a local-orchestration detail, not
+          something a real multi-host run needs.)
   - [x] **Public writeup + standalone extraction.**
         `writeup/distributed-training.md` is a self-contained account —
         the idea, the numpy result, the LoRA/Pythia result, the move to a
@@ -200,15 +220,16 @@ technical design behind each phase.
         real Pythia-70M local-SGD portion through this path so an actual
         LoRA run is Grid-replayable (`TRON_SPINE_DIR=DIR python
         queue_server.py`).
-  - [ ] Not yet done: LoRA over the real wire. The numpy MLP runs across
-        separate processes (`tron/training/distributed/`); the LoRA path
-        records into the spine but still trains in one process. Wiring
-        LoRA adapters through `tron/training/distributed/`'s transport —
-        adapter state dicts as the POST body instead of numpy vectors —
-        is the remaining "real model over a real network" combination.
-        `lora_spine.encode_adapter_state` / `decode_adapter_state` are
-        the serialization half of it; `param_server.TrainingSession`
-        would need an adapter-aware `model_kind`.
+  - [x] **LoRA over the real wire — done.** `tron/training/distributed/
+        lora_wire.py` + `lora_param_server.LoraTrainingSession` send LoRA
+        adapter state dicts (~400KB) as the round's POST body over the
+        same transport the numpy MLP uses; the ~282MB base model never
+        moves (every node loads its own). `model_kind: "lora"` on
+        `POST /training/session`; `run_local.py --lora`.
+        `tests/test_lora_over_wire.py` pins the final merged adapter
+        tensor-for-tensor against the single-process
+        `lora_demo.run_local_sgd_lora`. This is the "real model over a
+        real network" combination, now real.
 - [x] **Phase 4 v1 — The 3D Grid: passive replay.** `tron/grid/index.html`,
       served at `/grid/` by `queue_server.py`. Worker distance from the
       master = real measured heartbeat latency (the same number
