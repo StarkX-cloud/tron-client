@@ -39,6 +39,7 @@ from .base import (
 )
 from .verizon import VerizonAdapter
 from .att import ATTAdapter
+from .tmobile import TMobileAdapter
 from .tasks import AdapterConfig, run_op, ADAPTER_CLASSES
 from .gateway import CarrierGateway
 
@@ -47,6 +48,7 @@ __all__ = [
     "CarrierAdapter",
     "VerizonAdapter",
     "ATTAdapter",
+    "TMobileAdapter",
     "AdapterConfig",
     "CarrierOp",
     "CarrierResult",

@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from .base import CarrierOp, CarrierResult, OpKind, CarrierError
 from .att import ATTAdapter
+from .tmobile import TMobileAdapter
 from .verizon import VerizonAdapter
 
 
@@ -21,6 +22,7 @@ from .verizon import VerizonAdapter
 ADAPTER_CLASSES = {
     "verizon": VerizonAdapter,
     "att": ATTAdapter,
+    "tmobile": TMobileAdapter,
 }
 
 

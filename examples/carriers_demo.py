@@ -17,10 +17,15 @@ from tron.carriers.tasks import AdapterConfig
 def build_gateway() -> CarrierGateway:
     # Credentials come from the environment on whichever machine runs the op
     # (locally here, or a TRON worker when distributed=True). See .env.example.
+    #
+    # Pass event_log=EventLog() to record every op into the spine so it shows
+    # up in the 3D Grid replay (targets are redacted). Left off here to keep
+    # the demo side-effect free.
     return (
         CarrierGateway(rate_per_sec=5, burst=10)
         .register_verizon()  # VERIZON_CLIENT_ID / _SECRET / _API_KEY / _ACCOUNT_NAME
         .register_att()       # ATT_USERNAME / _API_KEY / _ACCOUNT_NAME
+        .register_tmobile()   # TMOBILE_CLIENT_ID / _SECRET / _ACCOUNT_NAME
     )
 
 

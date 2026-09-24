@@ -59,8 +59,8 @@ result = expensive_task(10).get()
   GPUs' reported specs into one synthetic profile, plus an
   OpenAI-compatible API gateway on top. Explicitly a simulation, not GPU
   virtualization.
-- **Carrier automation** (`tron/carriers/`): run tasks against Verizon and
-  AT&T **official developer APIs** (ThingSpace / Connectivity Management,
+- **Carrier automation** (`tron/carriers/`): run tasks against Verizon,
+  AT&T and T-Mobile **official developer APIs** (ThingSpace / Connectivity Management,
   AT&T IoT / Control Center, plus configurable enterprise messaging) as
   distributed TRON tasks — IoT SIM management, usage/account queries, and
   consent-gated notifications, with a shared rate budget and retries. See

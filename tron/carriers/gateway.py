@@ -30,14 +30,21 @@ from .base import (
 from .http import is_retryable
 from .base import CarrierAPIError
 from .tasks import AdapterConfig, run_op
+from .spine import log_submitted, log_result
 
 
 class CarrierGateway:
     def __init__(self, *, rate_per_sec: float = 5.0, burst: Optional[int] = None,
-                 max_attempts: int = 3) -> None:
+                 max_attempts: int = 3, event_log: Any = None,
+                 node_id: Optional[str] = None) -> None:
         self._configs: Dict[str, AdapterConfig] = {}
         self._limiter = RateLimiter(rate_per_sec, burst=burst)
         self.max_attempts = max_attempts
+        # Optional TRON spine EventLog: when set, every op is recorded to the
+        # append-only log (targets redacted) so carrier work shows up in the
+        # same replay substrate the 3D Grid renders from.
+        self._event_log = event_log
+        self._node_id = node_id
 
     # -- registration ------------------------------------------------------- #
     def register(self, config: AdapterConfig) -> "CarrierGateway":
@@ -49,6 +56,9 @@ class CarrierGateway:
 
     def register_att(self, **kw: Any) -> "CarrierGateway":
         return self.register(AdapterConfig(carrier="att", **kw))
+
+    def register_tmobile(self, **kw: Any) -> "CarrierGateway":
+        return self.register(AdapterConfig(carrier="tmobile", **kw))
 
     def carriers(self) -> List[str]:
         return sorted(self._configs)
@@ -77,14 +87,22 @@ class CarrierGateway:
         config = self._config_for(op.carrier)
         self._limiter.acquire(1.0, wait=wait)
 
+        task_id = log_submitted(self._event_log, op, node_id=self._node_id,
+                                distributed=distributed)
+
         if not distributed:
-            return retry(lambda: run_op(op, config),
-                         attempts=self.max_attempts,
-                         retry_on=(CarrierAPIError,),
-                         should_retry=is_retryable)
+            result = retry(lambda: run_op(op, config),
+                           attempts=self.max_attempts,
+                           retry_on=(CarrierAPIError,),
+                           should_retry=is_retryable)
+            log_result(self._event_log, op, result, task_id=task_id,
+                       node_id=self._node_id)
+            return result
 
         # Distribute across the TRON fabric. Import lazily to avoid a hard
-        # dependency at import time and any circular import.
+        # dependency at import time and any circular import. Completion is
+        # recorded when a caller gathers the future (see map()); a lone
+        # distributed execute() logs submission only.
         import tron
 
         remote_run = tron.remote(run_op, remote_only=True)
@@ -143,7 +161,11 @@ class CarrierGateway:
         results: List[CarrierResult] = []
         for op, fut in zip(ops, futures):
             try:
-                results.append(fut.get())
+                result = fut.get()
             except Exception as exc:  # gather failures as results, don't abort
-                results.append(CarrierResult.failure(op, f"dispatch failed: {exc}"))
+                result = CarrierResult.failure(op, f"dispatch failed: {exc}")
+            # Record the completion of each distributed op against the same
+            # task_id log_submitted used, so the spine sees submit -> complete.
+            log_result(self._event_log, op, result, node_id=self._node_id)
+            results.append(result)
         return results

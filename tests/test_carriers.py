@@ -258,3 +258,137 @@ def test_gateway_unregistered_carrier_errors():
     gw = CarrierGateway()
     with pytest.raises(Exception):
         gw.manage_sim("verizon", "status", iccid="1")
+
+
+# --------------------------------------------------------------------------- #
+# T-Mobile adapter
+# --------------------------------------------------------------------------- #
+def tmobile_with_recorder(**kw):
+    from tron.carriers import TMobileAdapter
+    creds = CarrierCredentials(client_id="id", client_secret="sec",
+                               account_name="ACC-9")
+    adapter = TMobileAdapter(creds, messaging_url=kw.pop("messaging_url", None))
+    adapter._access_token = "tok"
+    adapter._access_expiry = 10 ** 12
+    rec = RecordingHttp(**kw)
+    adapter._http = rec
+    return adapter, rec
+
+
+def test_tmobile_registered_in_registry():
+    from tron.carriers.tasks import ADAPTER_CLASSES
+    assert "tmobile" in ADAPTER_CLASSES
+
+
+def test_tmobile_status_and_deactivate():
+    adapter, rec = tmobile_with_recorder()
+    adapter.execute(CarrierOp(kind=OpKind.SIM_STATUS, carrier="tmobile",
+                              params={"iccid": "8901"}))
+    assert rec.calls[0]["method"] == "GET"
+    assert rec.calls[0]["url"].endswith("/iot/v1/devices/8901")
+
+    adapter.execute(CarrierOp(kind=OpKind.SIM_DEACTIVATE, carrier="tmobile",
+                              params={"iccid": "8901"}))
+    assert rec.calls[1]["method"] == "PATCH"
+    assert rec.calls[1]["json"]["state"] == "inactive"
+
+
+def test_gateway_registers_three_carriers():
+    gw = CarrierGateway().register_verizon().register_att().register_tmobile()
+    assert gw.carriers() == ["att", "tmobile", "verizon"]
+
+
+# --------------------------------------------------------------------------- #
+# Spine integration
+# --------------------------------------------------------------------------- #
+class FakeLog:
+    def __init__(self):
+        self.events = []
+
+    def append(self, task_id, type, data=None, node_id=None, timestamp=None):
+        self.events.append({"task_id": task_id, "type": type, "data": data or {},
+                            "node_id": node_id})
+        return self.events[-1]
+
+
+def test_spine_logs_submit_and_complete_locally(monkeypatch):
+    import tron.carriers.gateway as gwmod
+    from tron.carriers import CarrierResult
+
+    monkeypatch.setattr(gwmod, "run_op",
+                        lambda op, cfg: CarrierResult.success(op, {"ok": 1}))
+
+    log = FakeLog()
+    gw = CarrierGateway(rate_per_sec=1000, event_log=log,
+                        node_id="node-A").register_att()
+    gw.manage_sim("att", "status", iccid="8901")
+
+    types = [e["type"] for e in log.events]
+    assert types == ["carrier_op_submitted", "carrier_op_completed"]
+    # Same task_id for the pair -> submit->complete is one lineage.
+    assert log.events[0]["task_id"] == log.events[1]["task_id"]
+    assert all(e["node_id"] == "node-A" for e in log.events)
+
+
+def test_spine_redacts_sensitive_targets(monkeypatch):
+    import tron.carriers.gateway as gwmod
+    from tron.carriers import CarrierResult
+    monkeypatch.setattr(gwmod, "run_op",
+                        lambda op, cfg: CarrierResult.success(op, None))
+
+    log = FakeLog()
+    gw = CarrierGateway(rate_per_sec=1000, event_log=log).register_att(
+        messaging_url="https://msg.example/att")
+    gw.send_message("att", to=["+15551234567"], text="hello there",
+                    consent=True)
+
+    submitted = log.events[0]["data"]["params"]
+    # Phone number never stored in the clear; text stored only as a length.
+    assert submitted["to"] == ["sha256:" + submitted["to"][0].split(":")[1]]
+    assert "+15551234567" not in json_dumps(log.events)
+    assert submitted["text_len"] == len("hello there")
+    assert "text" not in submitted
+
+
+def json_dumps(obj):
+    import json
+    return json.dumps(obj, default=str)
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+def test_cli_carriers_lists(capsys):
+    from tron.carriers.cli import main
+    rc = main(["carriers"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "verizon" in out and "att" in out and "tmobile" in out
+
+
+def test_cli_sim_status(monkeypatch, capsys):
+    import tron.carriers.gateway as gwmod
+    from tron.carriers import CarrierResult
+    monkeypatch.setattr(gwmod, "run_op",
+                        lambda op, cfg: CarrierResult.success(op, {"state": "ACTIVE"},
+                                                              status=200))
+    from tron.carriers.cli import main
+    rc = main(["sim", "--carrier", "att", "--action", "status", "--iccid", "8901"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert '"ok": true' in out
+    assert "ACTIVE" in out
+
+
+def test_cli_send_requires_consent(monkeypatch, capsys):
+    from tron.carriers.cli import main
+    # No --consent -> refused with exit code 3, before any network.
+    rc = main(["send", "--carrier", "att", "--to", "+15551234567", "--text", "hi"])
+    assert rc == 3
+    assert "refused" in capsys.readouterr().err
+
+
+def test_cli_sim_status_missing_iccid():
+    from tron.carriers.cli import main
+    rc = main(["sim", "--carrier", "verizon", "--action", "status"])
+    assert rc == 2

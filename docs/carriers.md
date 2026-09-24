@@ -83,3 +83,43 @@ registering the class in `tron/carriers/tasks.py::ADAPTER_CLASSES`. The gateway,
 rate limiting, retries, consent gating, and distribution come for free.
 
 See `examples/carriers_demo.py` for a runnable walkthrough.
+
+## CLI
+
+Run ops from the shell (credentials from the environment):
+
+```bash
+python -m tron.carriers.cli carriers                     # list configured carriers
+python -m tron.carriers.cli sim   --carrier verizon --action status --iccid 8914...
+python -m tron.carriers.cli sim   --carrier tmobile --action activate --iccid 8901... --service-plan PLAN_A
+python -m tron.carriers.cli query --carrier att --what usage --iccid 8901...
+python -m tron.carriers.cli send  --carrier att --to +15551234567 --text "Device online" --consent
+```
+
+Add `--distributed` to run an op across a running TRON server + workers instead
+of locally. `send` refuses without `--consent`. Results print as JSON; the exit
+code is non-zero on a failed op (and `3` on a consent refusal).
+
+## Spine integration (3D Grid replay)
+
+Pass a spine `EventLog` and every op is recorded to the append-only log, so
+carrier work appears in the same replay/time-travel substrate the Grid renders:
+
+```python
+from tron.spine import EventLog
+from tron.carriers import CarrierGateway
+
+gw = CarrierGateway(event_log=EventLog(), node_id="edge-1").register_att()
+gw.manage_sim("att", "status", iccid="8901...")
+# -> emits carrier_op_submitted then carrier_op_completed under one task_id
+```
+
+Recipient phone numbers and ICCIDs are **redacted to a short content hash**
+before they reach the log, and message bodies are recorded only as a length —
+the stream stays traceable without storing PII or secrets.
+
+## Carriers
+
+`verizon` (ThingSpace), `att` (Control Center), and `tmobile` (IoT / Control
+Center) are built in. Register the ones you use:
+`gw.register_verizon()`, `gw.register_att()`, `gw.register_tmobile()`.
