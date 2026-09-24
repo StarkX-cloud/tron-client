@@ -46,6 +46,12 @@ try:
 except ImportError:
     pass
 
+# Integrated layers - Carrier automation (official Verizon / AT&T APIs)
+try:
+    from .carriers import CarrierGateway, CarrierOp, OpKind
+except ImportError:
+    pass
+
 # Integrated layers - vGPU Cluster
 try:
     from .gpu import VirtualGPUCluster, VirtualGPUNode, VirtualGPURuntime
@@ -87,6 +93,11 @@ __all__ = [
     "TrainingOrchestrator",
     "TrainingConfig",
     
+    # Integrated carrier automation
+    "CarrierGateway",
+    "CarrierOp",
+    "OpKind",
+
     # Integrated GPU cluster
     "VirtualGPUCluster",
     "VirtualGPUNode",
