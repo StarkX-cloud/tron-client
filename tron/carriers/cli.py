@@ -19,6 +19,7 @@ from dataclasses import asdict
 from typing import List, Optional
 
 from .base import CarrierResult, ConsentError, OpKind
+from .env import load_env
 from .gateway import CarrierGateway
 from .tasks import ADAPTER_CLASSES
 
@@ -52,9 +53,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--rate", type=float, default=5.0,
                    help="Shared rate-limit budget (requests/sec). Default 5.")
+    p.add_argument("--env", metavar="PATH", nargs="?", const=".env", default=None,
+                   help="Load credentials from a .env file (default path: .env)")
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("carriers", help="List carriers that have credentials configured")
+
+    pf = sub.add_parser("preflight",
+                        help="Read-only credential/connectivity check (no side effects)")
+    pf.add_argument("--carrier", choices=sorted(ADAPTER_CLASSES),
+                    help="Check one carrier (default: all)")
 
     def add_common(sp):
         sp.add_argument("--carrier", required=True,
@@ -89,12 +97,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.env:
+        load_env(args.env)
     gw = CarrierGateway(rate_per_sec=args.rate)
 
     if args.command == "carriers":
         _register_all(gw)
         print(json.dumps({"registered": gw.carriers()}, indent=2))
         return 0
+
+    if args.command == "preflight":
+        _register_all(gw, [args.carrier] if args.carrier else None)
+        results = gw.preflight(args.carrier)
+        report = [{"carrier": r.carrier, "ok": r.ok, "detail": r.detail,
+                   "base_url": r.base_url, "status": r.status} for r in results]
+        print(json.dumps({"preflight": report}, indent=2))
+        return 0 if all(r.ok for r in results) else 1
 
     _register_all(gw, [args.carrier])
     common = {"distributed": args.distributed, "ref": args.ref}

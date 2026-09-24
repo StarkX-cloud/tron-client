@@ -580,6 +580,82 @@ def spine_task(job_id: str):
     }
 
 
+def _build_carrier_gateway():
+    """Build a CarrierGateway from the server's own environment credentials.
+
+    Registers every carrier; ones without credentials simply fail their own
+    ops/preflight cleanly. Ops are logged to this server's spine EventLog so
+    carrier work shows up in the Grid replay alongside compute jobs.
+    """
+    from tron.carriers import CarrierGateway
+    gw = CarrierGateway(rate_per_sec=float(os.getenv("CARRIER_RATE_PER_SEC", "5")),
+                        event_log=event_log, node_id="queue-server")
+    gw.register_verizon()
+    gw.register_att()
+    gw.register_tmobile()
+    return gw
+
+
+@app.post("/carrier/preflight")
+def carrier_preflight(payload: dict = None):
+    """Read-only credential/connectivity check for carriers, over HTTP.
+
+    Body: {"carrier": "verizon"} (optional; omit to check all). No side
+    effects — never activates a SIM or sends a message.
+    """
+    payload = payload or {}
+    gw = _build_carrier_gateway()
+    try:
+        results = gw.preflight(payload.get("carrier"))
+    except Exception as exc:  # unknown carrier, etc.
+        return {"status": "error", "error": str(exc)}
+    return {"preflight": [
+        {"carrier": r.carrier, "ok": r.ok, "detail": r.detail,
+         "base_url": r.base_url, "status": r.status}
+        for r in results
+    ]}
+
+
+@app.post("/carrier/op")
+def carrier_op(payload: dict = None):
+    """Execute a single carrier operation server-side, over HTTP.
+
+    Body: {"carrier": "att", "kind": "sim_status", "params": {...},
+           "consent": false, "ref": "..."}. Messaging requires consent=true.
+    The op is recorded to the spine, and the normalized result is returned.
+    """
+    from tron.carriers import CarrierOp, OpKind
+    from tron.carriers.base import ConsentError, CarrierError
+
+    payload = payload or {}
+    carrier = payload.get("carrier")
+    kind_raw = payload.get("kind")
+    if not carrier or not kind_raw:
+        return {"status": "error", "error": "carrier and kind are required"}
+    try:
+        kind = OpKind(kind_raw)
+    except ValueError:
+        return {"status": "error",
+                "error": f"unknown kind {kind_raw!r}; valid: {[k.value for k in OpKind]}"}
+
+    op = CarrierOp(kind=kind, carrier=carrier,
+                   params=payload.get("params", {}) or {},
+                   consent=bool(payload.get("consent", False)),
+                   ref=payload.get("ref"))
+    gw = _build_carrier_gateway()
+    try:
+        result = gw.execute(op)  # local (server-side), rate-limited, logged
+    except ConsentError as exc:
+        return {"status": "refused", "error": str(exc)}
+    except CarrierError as exc:
+        return {"status": "error", "error": str(exc)}
+    return {
+        "ok": result.ok, "carrier": result.carrier, "kind": result.kind.value,
+        "status": result.status, "error": result.error, "ref": result.ref,
+        "data": result.data,
+    }
+
+
 @app.post("/scheduler/whatif")
 def scheduler_whatif(payload: dict = None):
     """Phase 4 Grid v2: non-destructive "what would the scheduler do if

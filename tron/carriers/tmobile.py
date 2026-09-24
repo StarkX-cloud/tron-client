@@ -34,6 +34,7 @@ from .base import (
     _env,
 )
 from .http import HttpSession
+from .normalize import extract_devices, normalize_device
 
 
 # T-Mobile IoT platform host. Override for your assigned tenant.
@@ -123,6 +124,12 @@ class TMobileAdapter(CarrierAdapter):
             raise CarrierConfigError("this T-Mobile operation needs an 'iccid'")
         return str(iccid)
 
+    # -- preflight ---------------------------------------------------------- #
+    def _preflight(self):
+        # OAuth2 client-credentials token exchange only; no device I/O.
+        self._ensure_access_token()
+        return ("OAuth2 token OK", 200)
+
     # -- dispatch ----------------------------------------------------------- #
     def _dispatch(self, op: CarrierOp) -> tuple[Any, Optional[int]]:
         if op.kind == OpKind.SEND_MESSAGE:
@@ -146,6 +153,24 @@ class TMobileAdapter(CarrierAdapter):
                 query[k] = params[k]
         return self._http.request("GET", self.endpoint("device_list"),
                                   headers=self._headers(), params=query)
+
+    def paginate_devices(self, params: Dict[str, Any], *, max_pages: int = 1000):
+        """Yield every device across pages (normalized). Stops on a short page."""
+        page = int(params.get("pageNumber", 1))
+        size = int(params.get("pageSize", 100))
+        for _ in range(max_pages):
+            query = self._account_params(params)
+            query["pageSize"] = size
+            query["pageNumber"] = page
+            data, _status = self._http.request(
+                "GET", self.endpoint("device_list"),
+                headers=self._headers(), params=query)
+            batch = extract_devices(data)
+            for rec in batch:
+                yield normalize_device(rec)
+            if len(batch) < size or not batch:
+                return
+            page += 1
 
     def _device_get(self, params: Dict[str, Any]):
         url = self.endpoint("device_get", iccid=self._iccid(params))

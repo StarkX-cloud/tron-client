@@ -151,8 +151,8 @@ def test_att_sim_status_gets_device_by_iccid():
     assert res.ok
     call = rec.calls[0]
     assert call["method"] == "GET"
-    assert call["url"].endswith("/rest/v1/devices/8901")
-    assert call["params"]["licenseKey"] == "LIC-1"
+    assert call["url"].endswith("/rws/api/v1/devices/8901")
+    assert call["params"]["accountId"] == "LIC-1"
 
 
 def test_att_deactivate_puts_status():
@@ -227,8 +227,8 @@ def test_run_op_builds_adapter_and_resolves_env_creds(monkeypatch):
     res = run_op(CarrierOp(kind=OpKind.SIM_STATUS, carrier="att",
                            params={"iccid": "555"}), cfg)
     assert res.ok
-    assert captured["url"].endswith("/rest/v1/devices/555")
-    assert captured["params"]["licenseKey"] == "WLIC"
+    assert captured["url"].endswith("/rws/api/v1/devices/555")
+    assert captured["params"]["accountId"] == "WLIC"
 
 
 # --------------------------------------------------------------------------- #
@@ -392,3 +392,173 @@ def test_cli_sim_status_missing_iccid():
     from tron.carriers.cli import main
     rc = main(["sim", "--carrier", "verizon", "--action", "status"])
     assert rc == 2
+
+
+# --------------------------------------------------------------------------- #
+# Verizon real auth flow (username/password session login)
+# --------------------------------------------------------------------------- #
+def test_verizon_session_login_posts_username_password():
+    creds = CarrierCredentials(client_id="cid", client_secret="csec",
+                               username="uws-user", password="uws-pass",
+                               account_name="0000123456-00001")
+    adapter = VerizonAdapter(creds)
+    rec = RecordingHttp(responses=[
+        ({"access_token": "acc", "expires_in": 3600}, 200),  # oauth
+        ({"sessionToken": "sess"}, 200),                      # session login
+    ])
+    adapter._http = rec
+    token = adapter._ensure_session_token()
+    assert token == "sess"
+    login_call = rec.calls[1]
+    assert login_call["url"].endswith("/m2m/v1/session/login")
+    assert login_call["json"] == {"username": "uws-user", "password": "uws-pass"}
+    assert login_call["headers"]["Authorization"] == "Bearer acc"
+
+
+# --------------------------------------------------------------------------- #
+# Preflight (read-only, no side effects)
+# --------------------------------------------------------------------------- #
+def test_preflight_ok_for_tmobile():
+    from tron.carriers import TMobileAdapter
+    creds = CarrierCredentials(client_id="id", client_secret="sec")
+    adapter = TMobileAdapter(creds)
+    adapter._http = RecordingHttp(responses=[
+        ({"access_token": "t", "expires_in": 3600}, 200),
+    ])
+    res = adapter.preflight()
+    assert res.ok
+    assert res.carrier == "tmobile"
+
+
+def test_preflight_fails_without_credentials():
+    from tron.carriers import ATTAdapter
+    adapter = ATTAdapter(CarrierCredentials())  # nothing set
+    res = adapter.preflight()
+    assert not res.ok
+    assert "credential" in res.detail.lower()
+
+
+def test_att_preflight_uses_single_record_list():
+    adapter, rec = att_with_recorder()
+    res = adapter.preflight()
+    assert res.ok
+    call = rec.calls[0]
+    assert call["method"] == "GET"
+    assert call["params"]["pageSize"] == 1  # read-only, minimal
+
+
+def test_gateway_preflight_all_carriers():
+    gw = CarrierGateway().register_att()
+    results = gw.preflight()
+    assert len(results) == 1 and results[0].carrier == "att"
+
+
+# --------------------------------------------------------------------------- #
+# .env loading
+# --------------------------------------------------------------------------- #
+def test_load_env_reads_file_without_override(tmp_path, monkeypatch):
+    from tron.carriers import load_env
+    envfile = tmp_path / ".env"
+    envfile.write_text(
+        "# comment\n"
+        "VERIZON_CLIENT_ID=abc123\n"
+        'export ATT_API_KEY="quoted-key"\n'
+        "\n"
+        "TMOBILE_CLIENT_ID=zzz\n"
+    )
+    monkeypatch.delenv("VERIZON_CLIENT_ID", raising=False)
+    monkeypatch.setenv("TMOBILE_CLIENT_ID", "already-set")
+    applied = load_env(str(envfile))
+    import os
+    assert os.environ["VERIZON_CLIENT_ID"] == "abc123"
+    assert os.environ["ATT_API_KEY"] == "quoted-key"
+    # existing env wins (no override)
+    assert os.environ["TMOBILE_CLIENT_ID"] == "already-set"
+    assert "TMOBILE_CLIENT_ID" not in applied
+
+
+def test_load_env_missing_file_is_noop(tmp_path):
+    from tron.carriers import load_env
+    assert load_env(str(tmp_path / "nope.env")) == {}
+
+
+# --------------------------------------------------------------------------- #
+# Normalization
+# --------------------------------------------------------------------------- #
+def test_normalize_device_maps_aliases():
+    from tron.carriers import normalize_device
+    v = normalize_device({"iccid": "89", "state": "ACTIVATED", "servicePlan": "P"})
+    assert v["iccid"] == "89"
+    assert v["status"] == "ACTIVATED"
+    assert v["rate_plan"] == "P"
+    assert v["_raw"]["servicePlan"] == "P"
+
+
+def test_extract_devices_handles_envelopes():
+    from tron.carriers import extract_devices
+    assert len(extract_devices({"devices": [{"iccid": "1"}, {"iccid": "2"}]})) == 2
+    assert len(extract_devices([{"iccid": "1"}])) == 1
+    assert len(extract_devices({"iccid": "solo", "status": "X"})) == 1
+    assert extract_devices(None) == []
+
+
+# --------------------------------------------------------------------------- #
+# Pagination
+# --------------------------------------------------------------------------- #
+def test_att_paginate_devices_follows_pages():
+    adapter, rec = att_with_recorder(responses=[
+        ({"devices": [{"iccid": "1"}, {"iccid": "2"}], "lastPage": False}, 200),
+        ({"devices": [{"iccid": "3"}], "lastPage": True}, 200),
+    ])
+    devices = list(adapter.paginate_devices({"pageSize": 2}))
+    assert [d["iccid"] for d in devices] == ["1", "2", "3"]
+    # Second request advanced the page number.
+    assert rec.calls[1]["params"]["pageNumber"] == 2
+
+
+def test_verizon_paginate_devices_uses_cursor():
+    adapter, rec = verizon_with_recorder(responses=[
+        ({"devices": [{"iccid": "a"}], "hasMoreData": True}, 200),
+        ({"devices": [{"iccid": "b"}], "hasMoreData": False}, 200),
+    ])
+    devices = list(adapter.paginate_devices({"account_name": "ACME-0001"}))
+    assert [d["iccid"] for d in devices] == ["a", "b"]
+    assert rec.calls[1]["json"]["largestDeviceIdSeen"] == 1
+
+
+def test_gateway_list_all_sims(monkeypatch):
+    gw = CarrierGateway(rate_per_sec=1000).register_att()
+
+    def fake_build():
+        class A:
+            def paginate_devices(self, params):
+                yield {"iccid": "x"}
+                yield {"iccid": "y"}
+        return A()
+    monkeypatch.setattr(gw._configs["att"], "build", fake_build)
+    out = gw.list_all_sims("att")
+    assert [d["iccid"] for d in out] == ["x", "y"]
+
+
+# --------------------------------------------------------------------------- #
+# AT&T native Control Center SMS (mobile-terminated to a SIM)
+# --------------------------------------------------------------------------- #
+def test_att_native_sms_to_iccid():
+    adapter, rec = att_with_recorder()  # no messaging_url -> native path
+    op = CarrierOp(kind=OpKind.SEND_MESSAGE, carrier="att",
+                   params={"iccid": "8901", "text": "ping"}, consent=True)
+    res = adapter.execute(op)
+    assert res.ok
+    call = rec.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/rws/api/v1/devices/8901/smsMessages")
+    assert call["json"]["messageText"] == "ping"
+
+
+def test_att_native_sms_requires_iccid():
+    adapter, _ = att_with_recorder()
+    op = CarrierOp(kind=OpKind.SEND_MESSAGE, carrier="att",
+                   params={"text": "ping"}, consent=True)
+    res = adapter.execute(op)  # missing iccid -> failed result
+    assert not res.ok
+    assert "iccid" in res.error.lower()

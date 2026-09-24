@@ -34,6 +34,7 @@ from .base import (
     CarrierResult,
     ConsentError,
     OpKind,
+    PreflightResult,
     RateLimiter,
     RateLimitExceeded,
 )
@@ -42,6 +43,8 @@ from .att import ATTAdapter
 from .tmobile import TMobileAdapter
 from .tasks import AdapterConfig, run_op, ADAPTER_CLASSES
 from .gateway import CarrierGateway
+from .env import load_env
+from .normalize import normalize_device, normalize_usage, extract_devices
 
 __all__ = [
     "CarrierGateway",
@@ -53,9 +56,14 @@ __all__ = [
     "CarrierOp",
     "CarrierResult",
     "OpKind",
+    "PreflightResult",
     "CarrierCredentials",
     "RateLimiter",
     "run_op",
+    "load_env",
+    "normalize_device",
+    "normalize_usage",
+    "extract_devices",
     "ADAPTER_CLASSES",
     # errors
     "CarrierError",

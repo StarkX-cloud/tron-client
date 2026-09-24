@@ -1,22 +1,28 @@
 """AT&T adapter — official developer APIs.
 
-Primary integration is **AT&T IoT / Control Center** (the Cisco Jasper-based
-REST API AT&T provisions for connected-device fleets) for SIM/device
-management, status and usage. A configurable messaging endpoint supports AT&T
-enterprise messaging where your account is provisioned for it.
+Primary integration is **AT&T IoT / Control Center** — Cisco IoT Control Center
+(formerly Jasper), the REST API AT&T provisions for connected-device fleets —
+for SIM/device management, status and usage. The REST v1 API lives under
+``/rws/api/v1`` (see developer.cisco.com/docs/control-center):
+
+* ``GET  /rws/api/v1/devices``                       list devices (accountId, pageNumber, pageSize)
+* ``GET  /rws/api/v1/devices/{iccid}``               device details
+* ``PUT  /rws/api/v1/devices/{iccid}``               update status / ratePlan
+* ``GET  /rws/api/v1/devices/{iccid}/ctdUsages``     cycle-to-date usage
+* ``POST /rws/api/v1/devices/{iccid}/smsMessages``   mobile-terminated SMS to the SIM
 
 Authentication is HTTP Basic using your Control Center ``username`` and
-``api_key`` (the account's API credential), exactly as AT&T/Jasper documents.
-The base URL is overridable so you can point at the exact Control Center host
-AT&T assigned to your account.
+``api_key`` (the account's API key from Cisco DevNet). The base URL is
+overridable so you can point at the exact ``rws`` host AT&T assigned to your
+account (sandbox is ``https://rws-jpotest.jasper.com``).
 
 Credentials (``credentials_from_env``) read, in order:
 
 * ``ATT_USERNAME``       -> username     (Control Center API user)
 * ``ATT_API_KEY``        -> api_key       (Control Center API key)
-* ``ATT_ACCOUNT_NAME``   -> account_name  (billing / account id, when required)
-* ``ATT_BASE_URL``       -> base_url override
-* ``ATT_MESSAGING_URL``  -> messaging endpoint override
+* ``ATT_ACCOUNT_NAME``   -> account_name  (accountId, when required)
+* ``ATT_BASE_URL``       -> base_url override (per-tenant rws host)
+* ``ATT_MESSAGING_URL``  -> A2P messaging gateway override (addressed by 'to')
 """
 
 from __future__ import annotations
@@ -34,10 +40,14 @@ from .base import (
     _env,
 )
 from .http import HttpSession
+from .normalize import extract_devices, normalize_device
 
 
 # AT&T Control Center (Jasper) REST host. Override for your assigned tenant.
-DEFAULT_BASE = "https://api.att-iot.com"
+# AT&T Control Center is Cisco IoT Control Center (Jasper). The REST v1 API
+# lives under /rws/api/v1 on a Jasper "rws" host. Verizon-style hostnames vary
+# per tenant (sandbox is https://rws-jpotest.jasper.com); override per account.
+DEFAULT_BASE = "https://rws.jasper.com"
 
 
 class ATTAdapter(CarrierAdapter):
@@ -66,20 +76,22 @@ class ATTAdapter(CarrierAdapter):
 
     def default_endpoints(self) -> Dict[str, str]:
         return {
-            "device_list": "rest/v1/devices",
-            "device_get": "rest/v1/devices/{iccid}",
-            "device_update": "rest/v1/devices/{iccid}",
-            "usage_get": "rest/v1/devices/{iccid}/ctdUsages",
+            "device_list": "rws/api/v1/devices",
+            "device_get": "rws/api/v1/devices/{iccid}",
+            "device_update": "rws/api/v1/devices/{iccid}",
+            "usage_get": "rws/api/v1/devices/{iccid}/ctdUsages",
+            "device_sms": "rws/api/v1/devices/{iccid}/smsMessages",
         }
 
     def supported(self) -> List[OpKind]:
-        base = [
+        # Control Center has a native mobile-terminated SMS-to-SIM endpoint, so
+        # messaging is always supported (to a device you own by ICCID). A
+        # messaging_url override additionally enables an A2P gateway.
+        return [
             OpKind.SIM_LIST, OpKind.SIM_ACTIVATE, OpKind.SIM_DEACTIVATE,
             OpKind.SIM_STATUS, OpKind.USAGE_QUERY, OpKind.ACCOUNT_QUERY,
+            OpKind.SEND_MESSAGE,
         ]
-        if self.messaging_url:
-            base.append(OpKind.SEND_MESSAGE)
-        return base
 
     # -- auth --------------------------------------------------------------- #
     def _headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -95,13 +107,23 @@ class ATTAdapter(CarrierAdapter):
 
     def _account_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         acct = params.get("account_name") or self.credentials.account_name
-        return {"licenseKey": acct} if acct else {}
+        return {"accountId": acct} if acct else {}
 
     def _iccid(self, params: Dict[str, Any]) -> str:
         iccid = params.get("iccid")
         if not iccid:
             raise CarrierConfigError("this AT&T operation needs an 'iccid'")
         return str(iccid)
+
+    # -- preflight ---------------------------------------------------------- #
+    def _preflight(self):
+        # Single-record device list: authenticates without side effects.
+        query = self._account_params({})
+        query["pageSize"] = 1
+        _data, status = self._http.request(
+            "GET", self.endpoint("device_list"),
+            headers=self._headers(), params=query)
+        return ("device list (pageSize=1) OK", status)
 
     # -- dispatch ----------------------------------------------------------- #
     def _dispatch(self, op: CarrierOp) -> tuple[Any, Optional[int]]:
@@ -127,6 +149,24 @@ class ATTAdapter(CarrierAdapter):
         return self._http.request("GET", self.endpoint("device_list"),
                                   headers=self._headers(), params=query)
 
+    def paginate_devices(self, params: Dict[str, Any], *, max_pages: int = 1000):
+        """Yield every device across pages (normalized). Stops on lastPage."""
+        page = int(params.get("pageNumber", 1))
+        for _ in range(max_pages):
+            query = self._account_params(params)
+            query["pageSize"] = int(params.get("pageSize", 100))
+            query["pageNumber"] = page
+            data, _status = self._http.request(
+                "GET", self.endpoint("device_list"),
+                headers=self._headers(), params=query)
+            batch = extract_devices(data)
+            for rec in batch:
+                yield normalize_device(rec)
+            last = isinstance(data, dict) and data.get("lastPage")
+            if last or not batch:
+                return
+            page += 1
+
     def _device_get(self, params: Dict[str, Any]):
         url = self.endpoint("device_get", iccid=self._iccid(params))
         return self._http.request("GET", url, headers=self._headers(),
@@ -151,24 +191,37 @@ class ATTAdapter(CarrierAdapter):
         return self._http.request("GET", url, headers=self._headers(), params=query)
 
     def _send_message(self, params: Dict[str, Any]):
-        if not self.messaging_url:
-            raise CarrierConfigError(
-                "AT&T messaging is not configured (set ATT_MESSAGING_URL "
-                "or pass messaging_url=)")
-        to = params.get("to")
         text = params.get("text")
-        if not to or text is None:
-            raise CarrierConfigError("send_message needs 'to' and 'text'")
-        addresses = to if isinstance(to, list) else [to]
-        body = {
-            "messageRequest": {
-                "address": addresses,
-                "message": text,
-            }
-        }
-        if params.get("from"):
-            body["messageRequest"]["from"] = params["from"]
+        if text is None:
+            raise CarrierConfigError("send_message needs 'text'")
+
+        # A2P gateway override (recipient MSISDNs).
+        if self.messaging_url:
+            to = params.get("to")
+            if not to:
+                raise CarrierConfigError("send_message needs 'to' for the A2P gateway")
+            addresses = to if isinstance(to, list) else [to]
+            body: Dict[str, Any] = {"messageRequest": {"address": addresses,
+                                                        "message": text}}
+            if params.get("from"):
+                body["messageRequest"]["from"] = params["from"]
+            return self._http.request(
+                "POST", self.messaging_url,
+                headers=self._headers({"Content-Type": "application/json"}),
+                json=body)
+
+        # Native Control Center mobile-terminated SMS to a SIM you own. The
+        # recipient is the device ICCID, not a phone number.
+        iccid = params.get("iccid") or params.get("to")
+        if not iccid:
+            raise CarrierConfigError(
+                "Control Center SMS is sent to a device by 'iccid' (or set "
+                "ATT_MESSAGING_URL for an A2P gateway addressed by 'to')")
+        if isinstance(iccid, list):
+            iccid = iccid[0]
+        url = self.endpoint("device_sms", iccid=str(iccid))
+        body = {"messageText": text}
         return self._http.request(
-            "POST", self.messaging_url,
+            "POST", url,
             headers=self._headers({"Content-Type": "application/json"}),
-            json=body)
+            params=self._account_params(params), json=body)

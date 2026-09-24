@@ -24,12 +24,18 @@ Design rules that hold across every adapter in this package:
 from __future__ import annotations
 
 import abc
+import logging
 import os
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+
+
+# Module logger. Never log credential material; adapters log op kind, carrier,
+# HTTP status and redacted identifiers only.
+logger = logging.getLogger("tron.carriers")
 
 
 # --------------------------------------------------------------------------- #
@@ -123,6 +129,17 @@ class CarrierResult:
     def failure(cls, op: "CarrierOp", error: str, status: Optional[int] = None) -> "CarrierResult":
         return cls(ok=False, kind=op.kind, carrier=op.carrier, error=error,
                    ref=op.ref, status=status)
+
+
+@dataclass
+class PreflightResult:
+    """Outcome of a read-only credential/connectivity check for one carrier."""
+
+    carrier: str
+    ok: bool
+    detail: str = ""
+    base_url: Optional[str] = None
+    status: Optional[int] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -273,12 +290,43 @@ class CarrierAdapter(abc.ABC):
         if op.requires_consent() and not op.consent:
             raise ConsentError(
                 f"{op.kind.value} requires an explicit consent=True marker")
+        logger.info("carrier op start carrier=%s kind=%s ref=%s",
+                    self.name, op.kind.value, op.ref)
         try:
             data, status = self._dispatch(op)
-            return CarrierResult.success(op, data, status=status)
+            result = CarrierResult.success(op, data, status=status)
+            logger.info("carrier op ok carrier=%s kind=%s status=%s ref=%s",
+                        self.name, op.kind.value, status, op.ref)
+            return result
         except CarrierError as exc:
             status = getattr(exc, "status", None)
+            logger.warning("carrier op fail carrier=%s kind=%s status=%s ref=%s: %s",
+                           self.name, op.kind.value, status, op.ref, exc)
             return CarrierResult.failure(op, str(exc), status=status)
+
+    # -- preflight ---------------------------------------------------------- #
+    def preflight(self) -> PreflightResult:
+        """Read-only credential + connectivity check for this carrier.
+
+        Runs the carrier's cheapest authenticated read (token exchange and/or a
+        single-record list) with **no side effects**, so operators can verify
+        real credentials before going live. Never activates a SIM or sends a
+        message. Override ``_preflight`` per carrier.
+        """
+        try:
+            detail, status = self._preflight()
+            logger.info("preflight ok carrier=%s status=%s", self.name, status)
+            return PreflightResult(self.name, True, detail=detail,
+                                   base_url=self.base_url, status=status)
+        except CarrierError as exc:
+            status = getattr(exc, "status", None)
+            logger.warning("preflight fail carrier=%s: %s", self.name, exc)
+            return PreflightResult(self.name, False, detail=str(exc),
+                                   base_url=self.base_url, status=status)
+
+    def _preflight(self) -> tuple[str, Optional[int]]:
+        """Return ``(detail, http_status)`` for a successful read-only check."""
+        raise CarrierConfigError(f"{self.name} has no preflight check")
 
     @abc.abstractmethod
     def _dispatch(self, op: CarrierOp) -> tuple[Any, Optional[int]]:

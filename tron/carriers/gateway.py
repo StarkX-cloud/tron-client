@@ -24,6 +24,7 @@ from .base import (
     CarrierResult,
     ConsentError,
     OpKind,
+    PreflightResult,
     RateLimiter,
     retry,
 )
@@ -62,6 +63,35 @@ class CarrierGateway:
 
     def carriers(self) -> List[str]:
         return sorted(self._configs)
+
+    # -- preflight ---------------------------------------------------------- #
+    def preflight(self, carrier: Optional[str] = None) -> List["PreflightResult"]:
+        """Read-only credential/connectivity check for one or all carriers.
+
+        Builds each adapter and runs its side-effect-free auth check. This is
+        the tool for verifying real credentials before going live.
+        """
+        names = [carrier] if carrier else self.carriers()
+        results = []
+        for name in names:
+            adapter = self._config_for(name).build()
+            results.append(adapter.preflight())
+        return results
+
+    def list_all_sims(self, carrier: str, **params: Any) -> List[Dict[str, Any]]:
+        """Page through every SIM/device on a carrier, normalized.
+
+        Consumes the carrier's native pagination cursor and returns one flat
+        list of normalized device records. Rate-limited per page.
+        """
+        adapter = self._config_for(carrier).build()
+        if not hasattr(adapter, "paginate_devices"):
+            raise CarrierError(f"{carrier} does not support pagination")
+        out: List[Dict[str, Any]] = []
+        for device in adapter.paginate_devices(params):
+            self._limiter.acquire(1.0)
+            out.append(device)
+        return out
 
     def _config_for(self, carrier: str) -> AdapterConfig:
         try:

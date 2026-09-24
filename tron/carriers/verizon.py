@@ -5,25 +5,28 @@ Verizon IoT M2M platform) for SIM/device management, status and usage. A
 configurable messaging endpoint supports Verizon's enterprise messaging where
 your account is provisioned for it.
 
-Authentication (ThingSpace) is two-legged, exactly as Verizon documents:
+Authentication (ThingSpace) is two-legged, exactly as Verizon documents
+(https://thingspace.verizon.com/documentation/apis/connectivity-management):
 
-1. OAuth2 *client_credentials* against the token endpoint using HTTP Basic auth
-   with your ``client_id`` / ``client_secret`` -> a bearer ``access_token``.
-2. A ThingSpace *session login* that exchanges your ``api_key`` (the
-   "VZ-M2M-Token" / username-password token, supplied here as ``api_key``) for
-   a short-lived ``sessionToken`` used on subsequent M2M calls.
+1. OAuth2 *client_credentials* against ``POST /api/ts/v1/oauth2/token`` using
+   HTTP Basic auth with your ``client_id`` / ``client_secret`` -> a bearer
+   ``access_token`` (valid ~1 hour).
+2. A ThingSpace *session login* — ``POST /api/m2m/v1/session/login`` with the
+   bearer token in the header and your UWS ``username`` / ``password`` in the
+   body -> a ``sessionToken`` sent as the ``VZ-M2M-Token`` header on subsequent
+   M2M calls (idles out after ~20 minutes).
 
 Endpoints and the base URL are overridable so you can point the adapter at the
 exact host/tenant Verizon provisioned for you. Defaults reflect Verizon's
-public ThingSpace host and are documented, not authoritative — configure them
-for your account.
+public ThingSpace host.
 
 Credentials (``credentials_from_env``) read, in order:
 
-* ``VERIZON_CLIENT_ID``      -> client_id     (OAuth2)
-* ``VERIZON_CLIENT_SECRET``  -> client_secret (OAuth2)
-* ``VERIZON_API_KEY``        -> api_key        (ThingSpace session token)
-* ``VERIZON_ACCOUNT_NAME``   -> account_name   (M2M billing account)
+* ``VERIZON_CLIENT_ID``      -> client_id     (OAuth2 app key)
+* ``VERIZON_CLIENT_SECRET``  -> client_secret (OAuth2 app secret)
+* ``VERIZON_USERNAME``       -> username       (UWS account username)
+* ``VERIZON_PASSWORD``       -> password       (UWS account password)
+* ``VERIZON_ACCOUNT_NAME``   -> account_name   (M2M billing account, e.g. 0000123456-00001)
 * ``VERIZON_BASE_URL``       -> base_url override
 * ``VERIZON_MESSAGING_URL``  -> messaging endpoint override
 """
@@ -45,6 +48,7 @@ from .base import (
     _env,
 )
 from .http import HttpSession
+from .normalize import extract_devices, normalize_device
 
 
 DEFAULT_BASE = "https://thingspace.verizon.com/api"
@@ -73,7 +77,9 @@ class VerizonAdapter(CarrierAdapter):
         return CarrierCredentials(
             client_id=_env("VERIZON_CLIENT_ID"),
             client_secret=_env("VERIZON_CLIENT_SECRET"),
-            api_key=_env("VERIZON_API_KEY"),
+            # ThingSpace session login uses the UWS account username/password.
+            username=_env("VERIZON_USERNAME"),
+            password=_env("VERIZON_PASSWORD"),
             account_name=_env("VERIZON_ACCOUNT_NAME"),
         )
 
@@ -128,13 +134,16 @@ class VerizonAdapter(CarrierAdapter):
                 return self._session_token
         access = self._ensure_access_token()
         with self._lock:
-            self.credentials.require("api_key")
+            # Per ThingSpace docs: POST the UWS username/password in the body
+            # with the OAuth bearer token in the header; the response carries a
+            # sessionToken used as VZ-M2M-Token on subsequent M2M calls.
+            self.credentials.require("username", "password")
             data, _ = self._http.request(
                 "POST", self.endpoint("session_login"),
                 headers={"Authorization": f"Bearer {access}",
-                         "VZ-M2M-Token": self.credentials.api_key or "",
                          "Content-Type": "application/json"},
-                json={},
+                json={"username": self.credentials.username,
+                      "password": self.credentials.password},
             )
             token = data.get("sessionToken") if isinstance(data, dict) else None
             if not token:
@@ -152,6 +161,13 @@ class VerizonAdapter(CarrierAdapter):
             "VZ-M2M-Token": session,
             "Content-Type": "application/json",
         }
+
+    # -- preflight ---------------------------------------------------------- #
+    def _preflight(self):
+        # Exercises OAuth2 + ThingSpace session login only; no device I/O.
+        self._ensure_access_token()
+        self._ensure_session_token()
+        return ("OAuth2 + session login OK", 200)
 
     # -- dispatch ----------------------------------------------------------- #
     def _dispatch(self, op: CarrierOp) -> tuple[Any, Optional[int]]:
@@ -192,6 +208,24 @@ class VerizonAdapter(CarrierAdapter):
             body["deviceId"] = devices[0] if len(devices) == 1 else devices
         return self._http.request("POST", self.endpoint("device_list"),
                                   headers=self._m2m_headers(), json=body)
+
+    def paginate_devices(self, params: Dict[str, Any], *, max_pages: int = 1000):
+        """Yield every device across pages (normalized). Uses ThingSpace's
+        largestDeviceIdSeen cursor and stops when hasMoreData is false."""
+        seen = int(params.get("largestDeviceIdSeen", 0))
+        for _ in range(max_pages):
+            body = {"accountName": self._account(params),
+                    "largestDeviceIdSeen": seen}
+            data, _status = self._http.request(
+                "POST", self.endpoint("device_list"),
+                headers=self._m2m_headers(), json=body)
+            batch = extract_devices(data)
+            for rec in batch:
+                yield normalize_device(rec)
+            more = isinstance(data, dict) and data.get("hasMoreData")
+            if not more or not batch:
+                return
+            seen += len(batch)
 
     def _device_status(self, params: Dict[str, Any]):
         if not (params.get("iccid") or params.get("device_ids")):

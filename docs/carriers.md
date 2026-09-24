@@ -123,3 +123,54 @@ the stream stays traceable without storing PII or secrets.
 `verizon` (ThingSpace), `att` (Control Center), and `tmobile` (IoT / Control
 Center) are built in. Register the ones you use:
 `gw.register_verizon()`, `gw.register_att()`, `gw.register_tmobile()`.
+
+## Going live (production checklist)
+
+The adapters implement each carrier's real documented API shape, but the exact
+host and credentials are yours to supply. To take this live:
+
+1. **Put credentials in `.env`** (see `.env.example`) or the environment. Load a
+   file with `--env` on the CLI, or `tron.carriers.load_env()` in code.
+2. **Set the per-tenant base URL** if the carrier assigned you a specific host
+   (`VERIZON_BASE_URL`, `ATT_BASE_URL`, `TMOBILE_BASE_URL`).
+3. **Run preflight** — a read-only credential + connectivity check with **no
+   side effects** (no SIM activation, no messages):
+   ```bash
+   python -m tron.carriers.cli --env .env preflight            # all carriers
+   python -m tron.carriers.cli --env .env preflight --carrier verizon
+   ```
+   Exit code is `0` only if every checked carrier authenticates. In code:
+   `CarrierGateway().register_verizon().preflight()`.
+4. **Smoke-test one read** against a SIM you own (`sim --action status`), then a
+   usage query, before any write (activate/deactivate) or message.
+
+### Real API shapes implemented
+
+- **Verizon ThingSpace**: OAuth2 `client_credentials` → bearer, then
+  `POST /api/m2m/v1/session/login` with UWS **username/password** → `sessionToken`
+  (sent as `VZ-M2M-Token`). Device ops under `/api/m2m/v1/devices/...`.
+- **AT&T IoT / Control Center** (Cisco Jasper): HTTP Basic; REST under
+  `/rws/api/v1/devices/{iccid}`; usage at `.../ctdUsages`; native
+  mobile-terminated SMS at `.../smsMessages`; `accountId` query param.
+- **T-Mobile IoT**: OAuth2 `client_credentials` → bearer; device ops under the
+  provisioned IoT API paths (overridable).
+
+### Pagination & normalization
+
+- `CarrierGateway.list_all_sims(carrier, **params)` pages through the whole
+  fleet using each carrier's native cursor and returns normalized records
+  (`iccid`, `status`, `rate_plan`, ... plus `_raw`).
+- `normalize_device` / `normalize_usage` map any single record to that shape.
+
+### Server API (non-Python clients)
+
+The queue server exposes two carrier endpoints (ops are logged to the spine):
+
+```bash
+curl -X POST $TRON/carrier/preflight -H 'content-type: application/json' \
+     -d '{"carrier":"att"}'
+curl -X POST $TRON/carrier/op -H 'content-type: application/json' \
+     -d '{"carrier":"att","kind":"sim_status","params":{"iccid":"8901..."}}'
+```
+
+`kind` is any `OpKind` value; messaging requires `"consent": true`.
