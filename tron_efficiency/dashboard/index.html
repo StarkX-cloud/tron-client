@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>TRON Compute Efficiency Engine</title>
+<style>
+  :root {
+    --navy: #0b1220;
+    --navy-2: #111c33;
+    --titanium: #8a93a3;
+    --titanium-light: #c7ccd6;
+    --white: #f4f6f9;
+    --accent: #5ab0ff;
+    --danger: #ff6b6b;
+    --ok: #5ee6a0;
+    --border: #22304a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: var(--navy);
+    color: var(--white);
+  }
+  header {
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+  }
+  header h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: 0.02em; }
+  header span.tag {
+    color: var(--titanium);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  main { padding: 24px 28px; max-width: 1100px; margin: 0 auto; }
+  section {
+    background: var(--navy-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+  }
+  h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--titanium-light);
+    margin: 0 0 12px 0;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  .stat { background: var(--navy); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; }
+  .stat .label { color: var(--titanium); font-size: 11px; text-transform: uppercase; }
+  .stat .value { font-size: 18px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  label { display: flex; flex-direction: column; font-size: 11px; color: var(--titanium); gap: 4px; }
+  input, select {
+    background: var(--navy);
+    border: 1px solid var(--border);
+    color: var(--white);
+    padding: 7px 8px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  button {
+    background: var(--accent);
+    border: none;
+    color: #06111f;
+    font-weight: 600;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--titanium); font-weight: 500; text-transform: uppercase; font-size: 11px; }
+  .ok { color: var(--ok); }
+  .fail { color: var(--danger); }
+  .warn { color: #ffcf6b; font-size: 12px; }
+  pre { white-space: pre-wrap; font-size: 12px; color: var(--titanium-light); max-height: 400px; overflow: auto; }
+  #log { font-size: 12px; color: var(--titanium); margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TRON Compute Efficiency Engine</h1>
+  <span class="tag">v0.1 — local inference benchmarking</span>
+</header>
+<main>
+  <section id="hardware-section">
+    <h2>Hardware &amp; runtime status</h2>
+    <div class="grid" id="hardware-grid"></div>
+  </section>
+
+  <section>
+    <h2>Run a workload</h2>
+    <form id="run-form">
+      <label>Model <input name="model" value="EleutherAI/pythia-70m" /></label>
+      <label>Device <select name="device"><option value="cpu">cpu</option><option value="cuda">cuda</option></select></label>
+      <label>Max new tokens <input name="max_new_tokens" type="number" value="32" /></label>
+      <label>Batch size <input name="batch_size" type="number" value="1" /></label>
+      <label>Policy <select name="policy"><option value="baseline">baseline</option><option value="offload">offload</option></select></label>
+      <label>Memory budget (MB) <input name="memory_budget_mb" type="number" value="100" /></label>
+      <button type="submit" id="run-button">Run</button>
+    </form>
+    <div id="log"></div>
+  </section>
+
+  <section>
+    <h2>Historical results</h2>
+    <table id="runs-table">
+      <thead>
+        <tr><th>Policy</th><th>Model</th><th>Device</th><th>Status</th><th>Load (s)</th><th>E2E (s)</th><th>Tok/s</th><th>Peak CPU mem</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <button id="refresh-runs" type="button" style="margin-top:10px;">Refresh</button>
+    <button id="report-button" type="button" style="margin-top:10px;">Generate report</button>
+    <pre id="report-output"></pre>
+  </section>
+</main>
+
+<script>
+async function loadHardware() {
+  const res = await fetch('/hardware');
+  const hw = await res.json();
+  const grid = document.getElementById('hardware-grid');
+  const stats = [
+    ['Platform', hw.platform],
+    ['Python', hw.python_version],
+    ['CPU cores', hw.cpu_count ?? 'unknown'],
+    ['RAM (bytes)', hw.cpu_total_memory_bytes ?? 'unknown'],
+    ['CUDA available', hw.cuda_available],
+    ['GPUs', hw.gpus.length],
+  ];
+  grid.innerHTML = stats.map(([label, value]) =>
+    `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div></div>`
+  ).join('');
+  if (hw.warnings && hw.warnings.length) {
+    grid.innerHTML += hw.warnings.map(w => `<div class="warn">${w}</div>`).join('');
+  }
+}
+
+function fmt(v) {
+  return (v === null || v === undefined) ? '-' : (typeof v === 'number' ? v.toFixed(3) : v);
+}
+
+async function loadRuns() {
+  const res = await fetch('/runs');
+  const runs = await res.json();
+  const tbody = document.querySelector('#runs-table tbody');
+  tbody.innerHTML = runs.map(r => {
+    const o = r.outcome;
+    const statusClass = o.success ? 'ok' : 'fail';
+    const statusText = o.success ? 'ok' : `failed: ${o.error}`;
+    return `<tr>
+      <td>${o.policy_name}</td>
+      <td>${r.config.model_name}</td>
+      <td>${r.config.device}</td>
+      <td class="${statusClass}">${statusText}</td>
+      <td>${fmt(o.load_time_seconds)}</td>
+      <td>${fmt(o.end_to_end_latency_seconds)}</td>
+      <td>${fmt(o.tokens_per_second)}</td>
+      <td>${o.peak_cpu_memory_bytes ?? '-'}</td>
+    </tr>`;
+  }).join('');
+}
+
+document.getElementById('run-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = document.getElementById('run-button');
+  const log = document.getElementById('log');
+  const data = Object.fromEntries(new FormData(e.target).entries());
+  data.max_new_tokens = parseInt(data.max_new_tokens, 10);
+  data.batch_size = parseInt(data.batch_size, 10);
+  data.memory_budget_mb = parseInt(data.memory_budget_mb, 10);
+  button.disabled = true;
+  log.textContent = 'Running — this loads a real model and may take a while on first download...';
+  try {
+    const res = await fetch('/runs', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+    const result = await res.json();
+    log.textContent = result.outcome.success
+      ? `Done. run_id=${result.run_id}`
+      : `Failed: ${result.outcome.error}`;
+    await loadRuns();
+  } catch (err) {
+    log.textContent = 'Request failed: ' + err;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('refresh-runs').addEventListener('click', loadRuns);
+document.getElementById('report-button').addEventListener('click', async () => {
+  const res = await fetch('/report');
+  document.getElementById('report-output').textContent = await res.text();
+});
+
+loadHardware();
+loadRuns();
+</script>
+</body>
+</html>
