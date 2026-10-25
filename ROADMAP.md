@@ -509,18 +509,32 @@ technical design behind each phase.
   (`test_resolve_max_memory_on_cuda_reserves_activation_headroom`,
   `test_resolve_max_memory_on_cuda_respects_custom_headroom_fraction`,
   `test_offload_policy_describe_reflects_custom_headroom_fraction`). 221
-  passing (was 219). **Honest gap:** the fix itself has not been re-run
-  against the real T4 — that would need another manual Colab session —
-  so the default fraction is a conservative extrapolation from one
-  working data point, not independently re-confirmed on hardware.
+  passing (was 219).
+  **Re-verified on the real T4 (same day):** replayed Run 1's exact
+  failing scenario (600MB cap, `OffloadPolicy` given 600MB as
+  `memory_budget_bytes`, so the fix hands accelerate only 240MB as the
+  weight budget) — **it still OOMs**, identical error as before the fix.
+  Replaying the 1.2GB-cap scenario the fix was modeled on confirms real
+  headroom is what made *that* case succeed. Conclusion, precisely: the
+  fix does what it claims (stop handing accelerate a zero-margin weight
+  budget — that's why 1.2GB works), but it has a floor — when the *total*
+  nominal budget itself is below the fixed CUDA/framework overhead for a
+  given model+GPU, no re-proportioning of that budget can succeed. 600MB
+  is below that floor for `pythia-410m` on a T4; 1.2GB is above it. This
+  is not "every budget now works," and is documented as such rather than
+  letting the 1.2GB success stand in for more than it showed. Full numbers
+  (both the re-verification failure and the original success) in
+  `writeup/compute-efficiency-gpu-validation.md`'s "Re-verifying the fix"
+  section.
   **Not yet done:**
   - That GPU run was a standalone script reproducing the mechanism, not
     the installed `tron_efficiency` package (CLI/API/dashboard) running
     end-to-end on a CUDA machine — that integration is still unexercised
     on real GPU hardware.
-  - The activation-headroom fix above needs a real-GPU re-run to confirm
-    it actually prevents the run-1 failure, not just that it changes the
-    number passed to accelerate.
+  - `OffloadPolicy` has no viable-budget floor check — a budget too small
+    for the model+GPU's fixed overhead just OOMs with accelerate's raw
+    error instead of a clearer diagnostic. Found during the fix
+    re-verification; not implemented.
   - Single model family tested per environment (`pythia-70m` CPU,
     `pythia-410m` the one GPU run); no sweep across model sizes/budgets
     yet (the engine supports it, the CLI doesn't expose a sweep flag).

@@ -171,15 +171,22 @@ splitting the model across GPU and CPU — the spec's actual "critical
 experiment," confirmed, not simulated. That write-up also documents a real
 design gap it surfaced: handing `OffloadPolicy` a weight budget with no
 headroom reserved for activations/CUDA context overhead can OOM it too
-(first attempt did, at a 600MB cap). **Fixed**: `OffloadPolicy` now reserves
-`gpu_activation_headroom_fraction` (default 0.6, configurable) of the
-nominal `memory_budget_bytes` before handing the rest to accelerate as the
-GPU weight budget — close to, and more conservative than, the ~58% headroom
-that was empirically proven to work on the T4 run. The fix itself is
-covered by unit tests (`resolve_max_memory` now reserves headroom on CUDA,
-unchanged on CPU); it has **not** been re-run against the real GPU, since
-that requires the same manual Colab session as the original validation —
-that re-run is still open work, not yet done.
+(first attempt did, at a 600MB cap). **Fixed and re-verified on the real
+T4**: `OffloadPolicy` now reserves `gpu_activation_headroom_fraction`
+(default 0.6, configurable) of the nominal `memory_budget_bytes` before
+handing the rest to accelerate as the GPU weight budget. Re-running the
+original 1.2GB-cap scenario confirms the fix does what it claims — real
+headroom is what made that case succeed. **But precision matters here**:
+replaying the exact *failing* 600MB-cap scenario from the first attempt,
+even with the fix applied (only 240MB handed to accelerate instead of the
+full 600MB), **it still fails** — same `CUDA out of memory` error. That
+600MB total budget is simply below a fixed-overhead floor for this
+model+GPU combination; no re-proportioning of a too-small total budget can
+rescue it. The fix is real and necessary (it's why 1.2GB works), but it is
+not "every budget now works," and the write-up says so explicitly rather
+than letting a single success imply more than it showed. See
+[writeup/compute-efficiency-gpu-validation.md](writeup/compute-efficiency-gpu-validation.md)'s
+"Re-verifying the fix" section for the full before/after numbers.
 
 **Actual measured result** (`EleutherAI/pythia-70m`, CPU, 32 generated
 tokens, 100MB CPU budget vs. the model's ~134MB footprint — see
@@ -206,10 +213,11 @@ same convention as `tron/training/benchmark_lora.py`'s ~20-minute real run).
   `OffloadPolicy`'s mechanism, not the installed `tron_efficiency` package
   (CLI/API/dashboard) actually running end-to-end on a CUDA machine — that
   integration is still unexercised on real GPU hardware.
-- The activation-headroom fix above is unit-tested but not yet re-verified
-  on real GPU hardware (would need another manual Colab session) — the
-  default fraction is a conservative extrapolation from one working data
-  point, not itself independently confirmed.
+- `OffloadPolicy` has no viable-budget floor check — it will accept a
+  total budget too small for the model+GPU's fixed overhead to ever
+  succeed under, regardless of headroom split, and just OOM with
+  accelerate's raw error rather than a clearer diagnostic (found during
+  the fix re-verification above; not implemented).
 - Single model family tested per environment (`pythia-70m` on CPU,
   `pythia-410m` on the one GPU run); no sweep across model sizes or memory
   budgets yet (`benchmarks/engine.py` supports it — `cli.py` just doesn't

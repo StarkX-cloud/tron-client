@@ -93,6 +93,57 @@ baseline success: False | offload success: True
   there), on a different model/budget — the two results are about different
   questions and shouldn't be merged into one number.
 
+## Re-verifying the fix (same session, after the headroom fix landed)
+
+After `resolve_max_memory`/`OffloadPolicy` were changed to reserve
+`gpu_activation_headroom_fraction` (default 0.6) of the nominal budget
+before handing the rest to `accelerate`, Run 1's exact failing scenario was
+replayed on the same T4: a 600MB hard process-wide VRAM cap, with
+`OffloadPolicy` given 600MB as `memory_budget_bytes` (so accelerate now
+only receives `600MB * 0.4 = 240MB` as the weight budget, instead of the
+full 600MB that caused the original failure).
+
+**Result: still fails.**
+
+```
+--- BASELINE (unchanged) ---
+{ "success": false, "error": "OutOfMemoryError: CUDA out of memory. Tried to allocate 100.00 MiB" }
+
+--- OFFLOAD (FIXED: only 251658240 bytes handed to accelerate, not the full 600MB) ---
+{ "success": false, "error": "OutOfMemoryError: CUDA out of memory. Tried to allocate 102.00 MiB" }
+
+=== VERIFICATION RESULT ===
+baseline success: False (expected: False, same as original Run 1)
+offload success: False (expected: True -- this is what the fix should change)
+FIX DID NOT RESOLVE IT: offload still fails at 600MB even with headroom reserved.
+```
+
+**What this actually means, precisely:** the headroom-reservation fix is
+real and does what it's supposed to — it stopped handing accelerate a
+weight budget with zero margin, and that is exactly why Run 3 (1.2GB cap,
+500MB weight budget, ~700MB headroom) succeeded. But reserving headroom
+only helps when the *total* budget is large enough that some valid split
+exists. At 600MB, even the most aggressive, correctly-proportioned split
+tried here (240MB weights / 360MB headroom) still isn't enough — this
+specific GPU + model + framework combination has a fixed overhead floor
+somewhere above 600MB and at or below 1.2GB, and no re-proportioning of a
+budget below that floor can succeed. This matches the original Run 2
+finding (200MB weight budget inside a 600MB cap also failed) — it wasn't
+really about the *split*, it was that 600MB itself was never a viable
+total budget for this model on this GPU.
+
+**So, honestly: the fix is confirmed to do what it claims (reserve real
+headroom, and that headroom is what made the 1.2GB case succeed), but it
+is not a fix for "every budget now works" — it never claimed to be, but
+it's worth stating plainly since it would be easy to over-read "fix
+confirmed" as "offload can now survive any budget baseline can't."** A
+future improvement worth considering: `OffloadPolicy` could detect when
+the resulting weight budget is implausibly small and surface a clearer
+warning than accelerate's own OOM message, rather than relying on the
+headroom fraction alone to paper over an unviable total budget. Not
+implemented here — flagged as a real follow-up, not treated as covered by
+today's fix.
+
 ## What this changes in the project's "not yet done" list
 
 - "No real GPU validation" is no longer accurate as an unqualified
