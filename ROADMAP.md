@@ -526,11 +526,35 @@ technical design behind each phase.
   (both the re-verification failure and the original success) in
   `writeup/compute-efficiency-gpu-validation.md`'s "Re-verifying the fix"
   section.
+  **Real installed package run end-to-end on GPU (same day, closes a
+  previously-open gap):** `feat/compute-efficiency-engine` pushed to
+  GitHub, cloned into a fresh Colab T4, installed via
+  `requirements-training.txt`, run through its own CLI — not a mirrored
+  script. `recommend --model EleutherAI/pythia-1.4b` correctly judged this
+  bigger, more commercially-relevant model (1.4B params vs. the
+  70M/410M used so far) fits on a full T4 without offload; `compare
+  --memory-budget-mb 1500` forced the offload path too, for a genuine
+  baseline-vs-offload run at this scale: baseline 48.42 tok/s at ~2.65GB
+  VRAM, offload 1.585 tok/s (~30.5x slower) at ~586MB VRAM (~4.8x less
+  memory — the clearest real memory win so far, paired honestly with its
+  throughput cost). Offload's measured peak GPU memory (586MB) landed
+  almost exactly on the headroom fix's computed weight budget
+  (`1500MB * 0.4 = 600MB`), confirming the fix works correctly in the real
+  package, not just the standalone script. Output correctness held (no
+  divergence between policies).
+  **New gap found by this run:** `BaselinePolicy` doesn't pass
+  `torch_dtype` to `from_pretrained` — it loads whatever dtype the
+  checkpoint is stored in on the Hub. `pythia-1.4b`'s checkpoint happens to
+  be fp16 (confirmed via download size: 2.93GB, matching fp16's ~2.83GB
+  estimate not fp32's ~5.66GB), which is why the advisor's fp16 estimate
+  landed within 0.6% of the measured peak — a coincidence of this
+  checkpoint's storage format, not because `recommend()`'s dtype choice is
+  actually wired into how `BaselinePolicy` loads a model. A model stored in
+  fp32 would silently load fp32 regardless of what was recommended.
   **Not yet done:**
-  - That GPU run was a standalone script reproducing the mechanism, not
-    the installed `tron_efficiency` package (CLI/API/dashboard) running
-    end-to-end on a CUDA machine — that integration is still unexercised
-    on real GPU hardware.
+  - The dtype-wiring gap just found: no code path connects `recommend()`'s
+    dtype choice to an actual `torch_dtype=` argument anywhere in
+    `tron_efficiency/memory/policies.py`.
   - `OffloadPolicy` has no viable-budget floor check — a budget too small
     for the model+GPU's fixed overhead just OOMs with accelerate's raw
     error instead of a clearer diagnostic. Found during the fix

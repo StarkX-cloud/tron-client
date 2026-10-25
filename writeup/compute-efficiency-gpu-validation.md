@@ -136,28 +136,98 @@ total budget for this model on this GPU.
 headroom, and that headroom is what made the 1.2GB case succeed), but it
 is not a fix for "every budget now works" — it never claimed to be, but
 it's worth stating plainly since it would be easy to over-read "fix
-confirmed" as "offload can now survive any budget baseline can't."** A
-future improvement worth considering: `OffloadPolicy` could detect when
-the resulting weight budget is implausibly small and surface a clearer
-warning than accelerate's own OOM message, rather than relying on the
-headroom fraction alone to paper over an unviable total budget. Not
-implemented here — flagged as a real follow-up, not treated as covered by
-today's fix.
+confirmed" as "offload can now survive any budget baseline can't."**
+
+## Running the real installed package end-to-end on GPU (closing the last gap)
+
+Everything above used a standalone script that reproduced the mechanism —
+not the committed `tron_efficiency` package itself. That gap is closed now:
+the `feat/compute-efficiency-engine` branch was pushed to GitHub, cloned
+into a fresh Colab T4 runtime, installed via `pip install -r
+requirements-training.txt`, and run through its real CLI — no mirrored
+code, the actual package.
+
+```bash
+python -m tron_efficiency.cli recommend --model EleutherAI/pythia-1.4b
+python -m tron_efficiency.cli compare --model EleutherAI/pythia-1.4b \
+    --device cuda --memory-budget-mb 1500 --max-new-tokens 16 --hourly-rate 0.50
+```
+
+`recommend` (real advisor, real hardware detection) correctly judged this
+1.4B-param model fits on a full T4 without offload: `device=cuda,
+dtype=fp16, policy=baseline, confidence=high` — fp16 weights (2,828,406,784
+bytes estimated) comfortably under the GPU's usable budget. A constrained
+`--memory-budget-mb 1500` was used for `compare` specifically to force the
+offload path too, so both policies could be tested for real on a bigger,
+commercially-relevant model size (1.4B vs. the 70M/410M used earlier).
+
+**Real results (both succeeded, output verified identical by the engine's
+own correctness check — no divergence warning was raised):**
+
+| Metric | baseline | offload | Winner |
+|---|---|---|---|
+| Model load time (s) | 34.63 | 1.085 | offload |
+| Time to first token (s) | 1.402 | 0.7267 | offload |
+| End-to-end latency, 16 tokens (s) | 0.3305 | 10.09 | baseline |
+| Throughput (tokens/sec) | 48.42 | 1.585 | baseline |
+| Peak CPU memory (bytes) | 3.715e9 (~3.46GB) | 4.338e9 (~4.04GB) | baseline |
+| Peak GPU memory allocated (bytes) | 2.844e9 (~2.65GB) | 6.285e8 (~586MB) | offload |
+
+Estimated cost at a configured $0.50/hour: baseline $0.000046/run, offload
+$0.001402/run (estimates, not measured cloud prices).
+
+**What this confirms, precisely:**
+- The headroom fix works correctly in the *real installed package*, not
+  just the standalone script: offload's actual peak GPU memory (586MB)
+  lands almost exactly on the computed weight budget
+  (`1500MB * (1 - 0.6) = 600MB`), confirming the reservation is doing what
+  it's supposed to at a new model size, end to end through the CLI.
+- At this bigger, real-GPU-throughput scale, the offload penalty is
+  **steeper** than the CPU case: ~30.5x slower throughput here (48.42 vs.
+  1.585 tok/s) versus ~5.8x on CPU — because the baseline here runs at real
+  GPU speed (fast), so the relative cost of falling back to per-layer disk
+  reads during generation is much more visible than it was against an
+  already-slow CPU baseline.
+- Offload's real GPU memory win is genuine and large here: **586MB vs.
+  2.65GB, a ~4.8x reduction** — unlike the CPU run in
+  `compute-efficiency-sample-report.md` where the memory win was marginal.
+  This is the clearest positive memory-efficiency result in this project so
+  far: real GPU memory saved, at a real, honestly-reported throughput cost.
+- Output correctness held: the benchmark engine's own cross-policy text
+  comparison found no divergence between baseline and offload generations.
+
+**A real gap this surfaced, not previously documented:** `BaselinePolicy`
+doesn't pass a `torch_dtype` to `from_pretrained` — it loads whatever dtype
+the checkpoint happens to be stored in on the Hub. `pythia-1.4b`'s
+checkpoint happens to be stored in fp16 (its `model.safetensors` download
+was 2.93GB, matching fp16's ~2.83GB estimate, not fp32's ~5.66GB), which is
+why the advisor's fp16 estimate (2,828,406,784 bytes) landed almost exactly
+on the measured peak (2.844e9 bytes, 0.6% off) — a happy coincidence of
+this particular checkpoint's storage format, not because `recommend()`'s
+dtype choice is actually wired into how `BaselinePolicy` loads the model.
+For a model whose checkpoint is stored in fp32, `BaselinePolicy` would
+silently load fp32 regardless of what `recommend()` suggested. There is no
+code path connecting the advisor's dtype recommendation to an actual
+`torch_dtype=` argument anywhere in `tron_efficiency/memory/policies.py` —
+this is a real, unimplemented piece of wiring, not covered by the
+`int8`/`int4` "not yet implemented" warning (which is about quantized
+loading specifically; this is about plain dtype selection, a smaller gap).
 
 ## What this changes in the project's "not yet done" list
 
+- No real end-to-end confidentiality, no defense against a malicious
+  participant, single-process master with no replication — all unrelated,
+  unchanged (see ROADMAP.md's distributed-training section).
 - "No real GPU validation" is no longer accurate as an unqualified
-  statement — the mechanism itself (`device_map`/`max_memory` genuinely
-  splitting a model under a hard VRAM cap) is now validated on real CUDA
-  hardware, for one model/budget pair.
-- Still not done: this was a standalone script, not the installed
-  `tron_efficiency` package running on a GPU machine end-to-end (CLI, API,
-  dashboard) — that integration hasn't been exercised on CUDA.
-- Still not done: `OffloadPolicy`'s real design gap found in Run 1 — it
-  does not currently reserve headroom for activations/context overhead
-  when a caller sets `memory_budget_bytes`; a caller who picks a budget
-  too close to the true minimum will see a confusing OOM instead of a
-  graceful degradation. Worth fixing before this is used by anyone besides
-  the person who already knows this gotcha.
-- Still only one model (`pythia-410m`) and one budget pair tested on GPU;
-  no sweep.
+  statement — both the mechanism and the installed package have now run,
+  for real, on CUDA hardware, for several model/budget pairs.
+- `OffloadPolicy`'s real design gap found in Run 1 (no activation
+  headroom reserved) — **fixed and re-verified** (see above), with an
+  honestly-reported floor it doesn't eliminate.
+- **New gap found during the real-package run:** `BaselinePolicy` doesn't
+  control or report the dtype it actually loads a model in — it's whatever
+  the checkpoint happens to be stored as. `recommend()`'s dtype
+  recommendation is therefore advisory even for `baseline`, not just for
+  the already-flagged `int8`/`int4` quantized case.
+- Still only a handful of model sizes tested (70M, 410M, 1.4B); no
+  systematic sweep across sizes/budgets/GPU types.

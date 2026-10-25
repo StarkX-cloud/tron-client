@@ -219,6 +219,24 @@ than letting a single success imply more than it showed. See
 [writeup/compute-efficiency-gpu-validation.md](writeup/compute-efficiency-gpu-validation.md)'s
 "Re-verifying the fix" section for the full before/after numbers.
 
+**The real installed package has now run end-to-end on GPU, closing that
+specific gap.** `feat/compute-efficiency-engine` was pushed to GitHub,
+cloned into a fresh Colab T4, installed normally, and run through its own
+CLI (`recommend` + `compare`) against `EleutherAI/pythia-1.4b` — a bigger,
+more commercially-relevant size than the 70M/410M used so far. The real
+advisor correctly judged it fits without offload on a full T4; a
+constrained `--memory-budget-mb 1500` forced the offload path too, for a
+genuine baseline-vs-offload comparison at this scale: baseline hit
+48.42 tok/s using ~2.65GB VRAM, offload hit 1.585 tok/s (~30.5x slower)
+using only ~586MB VRAM (~4.8x less memory — the clearest real memory win
+in this project so far, honestly paired with its real throughput cost).
+Output correctness held (no divergence between the two policies' text).
+Full numbers and a new gap this run surfaced (`BaselinePolicy` doesn't
+control which dtype it actually loads — it's whatever the checkpoint
+happens to be stored as, not something `recommend()`'s dtype choice
+actually drives) are in the write-up's "Running the real installed package
+end-to-end on GPU" section.
+
 **Actual measured result** (`EleutherAI/pythia-70m`, CPU, 32 generated
 tokens, 100MB CPU budget vs. the model's ~134MB footprint — see
 [writeup/compute-efficiency-sample-report.md](writeup/compute-efficiency-sample-report.md)
@@ -240,10 +258,11 @@ behind `TRON_EFFICIENCY_RUN_MODEL_TESTS=1` (not part of the default suite,
 same convention as `tron/training/benchmark_lora.py`'s ~20-minute real run).
 
 **Known gaps:**
-- The GPU validation above was a standalone script reproducing
-  `OffloadPolicy`'s mechanism, not the installed `tron_efficiency` package
-  (CLI/API/dashboard) actually running end-to-end on a CUDA machine — that
-  integration is still unexercised on real GPU hardware.
+- `BaselinePolicy` doesn't pass `torch_dtype` to `from_pretrained` — it
+  loads whatever dtype the checkpoint is stored in on the Hub, not
+  necessarily what `recommend()` suggested. Found during the real-package
+  GPU run (`pythia-1.4b` happened to be stored in fp16, so this coincided
+  with the advisor's recommendation — it wouldn't for an fp32 checkpoint).
 - `OffloadPolicy` has no viable-budget floor check — it will accept a
   total budget too small for the model+GPU's fixed overhead to ever
   succeed under, regardless of headroom split, and just OOM with
