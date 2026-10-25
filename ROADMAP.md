@@ -497,15 +497,30 @@ technical design behind each phase.
   cap, offload given the same 600MB as weight budget) OOM'd on *both*
   policies, surfacing a real design gap — `OffloadPolicy` doesn't reserve
   headroom for activations/CUDA context overhead, so a budget with no
-  margin fails even when the model would otherwise fit. Not yet fixed in
-  the package itself.
+  margin fails even when the model would otherwise fit.
+  **Fixed (same day):** `resolve_max_memory`/`OffloadPolicy` now reserve
+  `gpu_activation_headroom_fraction` (default 0.6, constructor-overridable)
+  of the nominal `memory_budget_bytes` before handing the remainder to
+  accelerate as the GPU weight budget — more conservative than the ~58%
+  headroom that was empirically proven to work in the Run 3 validation
+  above. `CPU` path is deliberately untouched (no hard OS-level RAM cap in
+  this codebase to collide with, unlike `set_per_process_memory_fraction`
+  for VRAM). Covered by new unit tests in `tests/test_efficiency_memory_policy.py`
+  (`test_resolve_max_memory_on_cuda_reserves_activation_headroom`,
+  `test_resolve_max_memory_on_cuda_respects_custom_headroom_fraction`,
+  `test_offload_policy_describe_reflects_custom_headroom_fraction`). 221
+  passing (was 219). **Honest gap:** the fix itself has not been re-run
+  against the real T4 — that would need another manual Colab session —
+  so the default fraction is a conservative extrapolation from one
+  working data point, not independently re-confirmed on hardware.
   **Not yet done:**
   - That GPU run was a standalone script reproducing the mechanism, not
     the installed `tron_efficiency` package (CLI/API/dashboard) running
     end-to-end on a CUDA machine — that integration is still unexercised
     on real GPU hardware.
-  - `OffloadPolicy`'s missing activation-headroom reserve (found above) —
-    a real, reproducible bug, not yet fixed.
+  - The activation-headroom fix above needs a real-GPU re-run to confirm
+    it actually prevents the run-1 failure, not just that it changes the
+    number passed to accelerate.
   - Single model family tested per environment (`pythia-70m` CPU,
     `pythia-410m` the one GPU run); no sweep across model sizes/budgets
     yet (the engine supports it, the CLI doesn't expose a sweep flag).

@@ -171,7 +171,15 @@ splitting the model across GPU and CPU — the spec's actual "critical
 experiment," confirmed, not simulated. That write-up also documents a real
 design gap it surfaced: handing `OffloadPolicy` a weight budget with no
 headroom reserved for activations/CUDA context overhead can OOM it too
-(first attempt did, at a 600MB cap) — not yet fixed in the package itself.
+(first attempt did, at a 600MB cap). **Fixed**: `OffloadPolicy` now reserves
+`gpu_activation_headroom_fraction` (default 0.6, configurable) of the
+nominal `memory_budget_bytes` before handing the rest to accelerate as the
+GPU weight budget — close to, and more conservative than, the ~58% headroom
+that was empirically proven to work on the T4 run. The fix itself is
+covered by unit tests (`resolve_max_memory` now reserves headroom on CUDA,
+unchanged on CPU); it has **not** been re-run against the real GPU, since
+that requires the same manual Colab session as the original validation —
+that re-run is still open work, not yet done.
 
 **Actual measured result** (`EleutherAI/pythia-70m`, CPU, 32 generated
 tokens, 100MB CPU budget vs. the model's ~134MB footprint — see
@@ -198,10 +206,10 @@ same convention as `tron/training/benchmark_lora.py`'s ~20-minute real run).
   `OffloadPolicy`'s mechanism, not the installed `tron_efficiency` package
   (CLI/API/dashboard) actually running end-to-end on a CUDA machine — that
   integration is still unexercised on real GPU hardware.
-- `OffloadPolicy` doesn't reserve headroom for activations when a caller
-  picks `memory_budget_bytes` — a budget too close to the true minimum
-  OOMs confusingly instead of degrading gracefully (found during GPU
-  validation, not yet fixed).
+- The activation-headroom fix above is unit-tested but not yet re-verified
+  on real GPU hardware (would need another manual Colab session) — the
+  default fraction is a conservative extrapolation from one working data
+  point, not itself independently confirmed.
 - Single model family tested per environment (`pythia-70m` on CPU,
   `pythia-410m` on the one GPU run); no sweep across model sizes or memory
   budgets yet (`benchmarks/engine.py` supports it — `cli.py` just doesn't
