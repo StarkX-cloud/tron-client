@@ -483,25 +483,38 @@ technical design behind each phase.
   **~5.8x slower end-to-end** (10.2s vs 1.8s; 3.1 vs 18.0 tok/s) with
   only marginally lower peak memory (464MB vs 487MB) — a negative/mixed
   result, reported honestly as one, not a TRON win.
+  **GPU validation follow-up (same day):** this dev machine has no CUDA,
+  so the GPU-budget code path (`OffloadPolicy` targeting
+  `max_memory={0: budget, ...}` when `device="cuda"`) was implemented per
+  spec but unexercised. Validated it for real against a free-tier NVIDIA
+  T4 (Google Colab) instead — see
+  `writeup/compute-efficiency-gpu-validation.md`. With a real, OS-enforced
+  1.2GB VRAM cap and `pythia-410m` (~1.64GB fp32), the baseline genuinely
+  fails (real `CUDA out of memory`) while the offload mechanism genuinely
+  succeeds under the identical cap, splitting the model across GPU/CPU —
+  **the spec's actual "critical experiment," confirmed on real hardware,
+  not simulated.** Took three iterations to get a valid setup: run 1 (600MB
+  cap, offload given the same 600MB as weight budget) OOM'd on *both*
+  policies, surfacing a real design gap — `OffloadPolicy` doesn't reserve
+  headroom for activations/CUDA context overhead, so a budget with no
+  margin fails even when the model would otherwise fit. Not yet fixed in
+  the package itself.
   **Not yet done:**
-  - No real GPU validation. This dev machine has no CUDA
-    (`torch.cuda.is_available()` is `False`); the GPU-budget code path
-    (`OffloadPolicy` targeting `max_memory={0: budget, ...}` when
-    `device="cuda"`) exists and is implemented per the spec but has never
-    actually run against a GPU. What *was* validated here is the CPU
-    analog — constraining CPU RAM and forcing genuine disk offload — and
-    every hardware report/result/warning says so explicitly.
-  - The spec's actual "critical experiment" (baseline *fails* under a
-    budget that the constrained path *succeeds* under) was not
-    demonstrated — `pythia-70m`'s ~134MB footprint fits trivially in this
-    machine's RAM regardless of a nominal CPU budget, so the baseline
-    never fails. Would need either a much larger model or an OS-level
-    memory limit (no portable one exists on Windows for this), not
-    attempted here.
-  - Single model family tested; no sweep across model sizes/budgets yet
-    (the engine supports it, the CLI doesn't expose a sweep flag).
+  - That GPU run was a standalone script reproducing the mechanism, not
+    the installed `tron_efficiency` package (CLI/API/dashboard) running
+    end-to-end on a CUDA machine — that integration is still unexercised
+    on real GPU hardware.
+  - `OffloadPolicy`'s missing activation-headroom reserve (found above) —
+    a real, reproducible bug, not yet fixed.
+  - Single model family tested per environment (`pythia-70m` CPU,
+    `pythia-410m` the one GPU run); no sweep across model sizes/budgets
+    yet (the engine supports it, the CLI doesn't expose a sweep flag).
   - Peak CPU memory is a 50ms-interval polling-thread approximation, not
     a true OS peak-RSS reading (no portable equivalent on Windows).
+  - On this specific CPU-only dev machine, `pythia-70m`'s ~134MB footprint
+    fits trivially in RAM regardless of a nominal CPU budget, so the
+    baseline-fails/offload-succeeds result could not be reproduced
+    *locally* — only on the GPU run above.
   Tests: `tests/test_efficiency_hardware.py`,
   `tests/test_efficiency_results.py`,
   `tests/test_efficiency_memory_policy.py`, `tests/test_efficiency_api.py`

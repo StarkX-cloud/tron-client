@@ -155,10 +155,23 @@ performance comparison.
 CUDA GPU (`torch.cuda.is_available()` is `False`). The spec's
 GPU-memory-budget experiment is implemented verbatim for a CUDA machine
 (`OffloadPolicy` targets GPU VRAM via `max_memory={0: budget, ...}` when
-`device="cuda"`), but could only be *exercised* here via its real CPU
+`device="cuda"`), and could only be *exercised* locally via its real CPU
 analog — constraining CPU RAM and forcing genuine disk offload. Every
 hardware report, result JSON, and generated report says this explicitly;
 nothing here claims a GPU result that wasn't actually measured on a GPU.
+
+**GPU path since validated on real CUDA hardware** (a free-tier NVIDIA T4,
+not this dev machine — see
+[writeup/compute-efficiency-gpu-validation.md](writeup/compute-efficiency-gpu-validation.md)):
+with a real, OS-enforced 1.2GB VRAM cap on the process and
+`EleutherAI/pythia-410m` (~1.64GB in fp32), the baseline genuinely fails
+with a real `CUDA out of memory` error, while the offload mechanism
+(`device_map`/`max_memory`) genuinely succeeds under the identical cap by
+splitting the model across GPU and CPU — the spec's actual "critical
+experiment," confirmed, not simulated. That write-up also documents a real
+design gap it surfaced: handing `OffloadPolicy` a weight budget with no
+headroom reserved for activations/CUDA context overhead can OOM it too
+(first attempt did, at a 600MB cap) — not yet fixed in the package itself.
 
 **Actual measured result** (`EleutherAI/pythia-70m`, CPU, 32 generated
 tokens, 100MB CPU budget vs. the model's ~134MB footprint — see
@@ -181,25 +194,29 @@ behind `TRON_EFFICIENCY_RUN_MODEL_TESTS=1` (not part of the default suite,
 same convention as `tron/training/benchmark_lora.py`'s ~20-minute real run).
 
 **Known gaps:**
-- No real GPU validation — the GPU-budget code path exists but is
-  untested on this machine; the CPU/disk-offload analog is what's actually
-  verified.
-- Single model family tested (`pythia-70m`); no sweep across model sizes
-  or memory budgets yet (`benchmarks/engine.py` supports it — `cli.py` just
-  doesn't expose a sweep flag yet).
+- The GPU validation above was a standalone script reproducing
+  `OffloadPolicy`'s mechanism, not the installed `tron_efficiency` package
+  (CLI/API/dashboard) actually running end-to-end on a CUDA machine — that
+  integration is still unexercised on real GPU hardware.
+- `OffloadPolicy` doesn't reserve headroom for activations when a caller
+  picks `memory_budget_bytes` — a budget too close to the true minimum
+  OOMs confusingly instead of degrading gracefully (found during GPU
+  validation, not yet fixed).
+- Single model family tested per environment (`pythia-70m` on CPU,
+  `pythia-410m` on the one GPU run); no sweep across model sizes or memory
+  budgets yet (`benchmarks/engine.py` supports it — `cli.py` just doesn't
+  expose a sweep flag yet).
 - Peak CPU memory is sampled via a polling thread (50ms interval), not a
   true OS-level peak — Windows has no `resource.getrusage` equivalent.
-- The "critical experiment" (baseline *fails* under a budget that offload
-  *succeeds* under) couldn't be demonstrated on this machine: this model's
-  full footprint (~134MB) fits trivially in available RAM, so the baseline
-  never actually fails regardless of a nominal "budget" — a real test of
-  that claim needs either a much larger model or OS-level memory limits
-  this environment doesn't provide a portable way to set.
+- On this CPU-only dev machine specifically, the "critical experiment"
+  (baseline fails, offload succeeds, same budget) couldn't be demonstrated
+  locally — `pythia-70m`'s ~134MB footprint fits trivially in available
+  RAM. It *was* demonstrated on real CUDA hardware instead (see above).
 
-The single most valuable next experiment: run this against a real CUDA
-GPU with a model whose weights actually exceed VRAM, to validate the
-untested GPU-budget code path and get a real answer to the "baseline fails,
-offload succeeds" question this machine couldn't test.
+The single most valuable next experiment: run the actual `tron_efficiency`
+package (not just the mechanism) end-to-end on a CUDA machine — CLI,
+benchmark engine, API, dashboard all pointed at a real GPU — to close the
+integration gap the standalone validation script doesn't cover.
 
 ## Contributing / picking up a phase
 
