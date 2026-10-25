@@ -4,6 +4,7 @@ from tron_efficiency.memory.policies import (
     LoadedModel,
     MemoryPolicy,
     OffloadPolicy,
+    UnsupportedDtypeCombination,
     resolve_max_memory,
 )
 
@@ -14,4 +15,5 @@ __all__ = [
     "LoadedModel",
     "resolve_max_memory",
     "DEFAULT_GPU_ACTIVATION_HEADROOM_FRACTION",
+    "UnsupportedDtypeCombination",
 ]

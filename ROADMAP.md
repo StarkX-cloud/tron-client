@@ -611,3 +611,57 @@ technical design behind each phase.
   calibration at and around both confirmed data points, the quantization-
   executability warning) plus `tests/test_efficiency_api.py`'s
   `test_recommend_endpoint`. 233 passing (was 221).
+- [x] **Real quantized loading (`int8`/`int4` via bitsandbytes) — closes
+  the gap the advisor entry above flagged** (same day).
+  `WorkloadConfig.dtype` now flows into an actual `torch_dtype=`/
+  `quantization_config=` argument in both `BaselinePolicy` and
+  `OffloadPolicy` (`memory/policies.py`'s `_loading_kwargs_for_dtype`) —
+  not advisory, real `BitsAndBytesConfig(load_in_8bit=True)` /
+  `load_in_4bit=True`, the same mechanism any `transformers` user has.
+  `dtype=None` (the default) preserves the exact old behavior (no kwargs
+  added at all) for backward compatibility. Verified locally, end to end,
+  on real CPU hardware (no GPU needed for this part): `pythia-70m` loads
+  and generates correctly as real int8 and int4 quantized weights via
+  `run_workload`.
+  **Real bitsandbytes constraint, surfaced honestly rather than hidden:**
+  4-bit quantization cannot combine with device-map offload (only 8-bit
+  has the `llm_int8_enable_fp32_cpu_offload` escape hatch) —
+  `recommend()` now always picks `int8`, never `int4`, when it needs to
+  recommend the offload policy, and `OffloadPolicy` itself raises a clear
+  `UnsupportedDtypeCombination` (caught the same way `run_workload`
+  already catches `ImportError`) if asked for int4+offload anyway, rather
+  than failing confusingly deep inside `from_pretrained`. Verified: the
+  rejection fires with the intended message, and real int8+offload
+  succeeds at a large enough CPU budget.
+  **Also fixes the dtype-wiring gap found during the real-GPU-package
+  run** (`pythia-1.4b` loading fp16 only by checkpoint-storage
+  coincidence, not because anything requested it) — `BaselinePolicy`/
+  `OffloadPolicy` now actually honor an explicit `dtype`, closing that gap
+  too, not just the quantization one.
+  **New gap found while testing this, more fragile than first thought:**
+  `int8` quantization combined with `OffloadPolicy` on CPU-only hardware
+  behaves inconsistently across budgets. Probed `pythia-70m` at six CPU
+  budgets: 100MB fails with accelerate's "whole model to disk" refusal
+  (the same error unquantized offload gives below its own viable floor);
+  110MB and 120MB fail with a *different* error —
+  `RuntimeError: Cannot access accelerator device when none is
+  available` — a CUDA-shaped failure on a machine with no CUDA at all;
+  130MB, 150MB, 200MB, 250MB all report success. The 110-120MB failure
+  mode specifically suggests bitsandbytes' `llm_int8_enable_fp32_cpu_offload`
+  escape hatch may internally assume a reachable CUDA accelerator even
+  when only splitting between CPU and disk — plausibly a real quirk of a
+  CUDA-oriented library used in a CPU-only configuration, not something
+  this project introduced. The "successes" above could not be confirmed
+  as genuine disk-split placement either way: `model.hf_device_map` isn't
+  populated the same way for quantized models as it is for plain-dtype
+  offload, so the usual placement evidence this project relies on
+  elsewhere isn't available here. Properly characterizing this needs a
+  real GPU, not more CPU-only guessing — flagged for the next GPU
+  session, deliberately not resolved here.
+  Tests: 8 new cases in `tests/test_efficiency_memory_policy.py`
+  (`_loading_kwargs_for_dtype`/`_requires_device_map` behavior for every
+  dtype, the int4+offload rejection, backward-compat of `dtype=None`)
+  plus 2 updated in `tests/test_efficiency_advisor.py`
+  (`test_recommend_picks_quantized_dtype_without_unsupported_warning`,
+  `test_recommend_never_pairs_int4_with_offload`). `bitsandbytes` added
+  to `requirements-training.txt`.

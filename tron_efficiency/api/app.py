@@ -40,6 +40,7 @@ class RunRequest(BaseModel):
     device: str = "cpu"
     policy: str = "baseline"
     memory_budget_mb: int = 100
+    dtype: str | None = None
 
 
 def _build_policy(req: RunRequest):
@@ -70,6 +71,7 @@ def create_run(req: RunRequest):
         max_new_tokens=req.max_new_tokens,
         batch_size=req.batch_size,
         device=req.device,
+        dtype=req.dtype,
     )
     policy = _build_policy(req)
     outcome = run_workload(config, policy)

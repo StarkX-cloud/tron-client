@@ -20,6 +20,15 @@ class WorkloadConfig:
     batch_size: int = 1
     device: str = "cpu"  # "cpu" or "cuda" — chosen explicitly, never guessed
     seed: int = 0
+    # None = don't pass torch_dtype at all (the old, pre-dtype-control
+    # behavior: whatever the checkpoint happens to be stored as). One of
+    # "fp32"/"fp16"/"bf16"/"int8"/"int4" explicitly requests that precision
+    # -- see memory/policies.py for how each is actually loaded. Added
+    # after discovering (writeup/compute-efficiency-gpu-validation.md) that
+    # BaselinePolicy silently loaded whatever dtype a checkpoint happened
+    # to be stored in, which only coincidentally matched what the advisor
+    # recommended.
+    dtype: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

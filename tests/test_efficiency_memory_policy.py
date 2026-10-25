@@ -1,9 +1,14 @@
 """Memory policy logic, tested without loading any real model."""
 
+import pytest
+
 from tron_efficiency.memory.policies import (
     DEFAULT_GPU_ACTIVATION_HEADROOM_FRACTION,
     BaselinePolicy,
     OffloadPolicy,
+    UnsupportedDtypeCombination,
+    _loading_kwargs_for_dtype,
+    _requires_device_map,
     resolve_max_memory,
 )
 
@@ -57,3 +62,53 @@ def test_resolve_max_memory_on_cuda_respects_custom_headroom_fraction():
 def test_offload_policy_describe_reflects_custom_headroom_fraction():
     policy = OffloadPolicy(memory_budget_bytes=256 * 1024 * 1024, gpu_activation_headroom_fraction=0.25)
     assert policy.describe()["gpu_activation_headroom_fraction"] == 0.25
+
+
+def test_dtype_none_preserves_old_no_kwargs_behavior():
+    # The old behavior (before the dtype-wiring fix) was to pass nothing to
+    # from_pretrained at all -- preserved exactly for dtype=None so existing
+    # callers/tests that don't care about dtype are unaffected.
+    assert _loading_kwargs_for_dtype(None) == {}
+
+
+def test_dtype_fp_variants_map_to_torch_dtype():
+    import torch
+
+    assert _loading_kwargs_for_dtype("fp32") == {"torch_dtype": torch.float32}
+    assert _loading_kwargs_for_dtype("fp16") == {"torch_dtype": torch.float16}
+    assert _loading_kwargs_for_dtype("bf16") == {"torch_dtype": torch.bfloat16}
+
+
+def test_dtype_int8_produces_quantization_config():
+    kwargs = _loading_kwargs_for_dtype("int8")
+    assert "quantization_config" in kwargs
+    assert kwargs["quantization_config"].load_in_8bit is True
+
+
+def test_dtype_int8_with_cpu_offload_sets_fp32_cpu_offload_flag():
+    kwargs = _loading_kwargs_for_dtype("int8", allow_cpu_offload=True)
+    assert kwargs["quantization_config"].llm_int8_enable_fp32_cpu_offload is True
+
+
+def test_dtype_int4_rejects_cpu_offload_combination():
+    # Real bitsandbytes constraint: 4-bit has no fp32-cpu-offload escape
+    # hatch the way 8-bit does.
+    with pytest.raises(UnsupportedDtypeCombination):
+        _loading_kwargs_for_dtype("int4", allow_cpu_offload=True)
+
+
+def test_dtype_int4_without_offload_is_fine():
+    kwargs = _loading_kwargs_for_dtype("int4", allow_cpu_offload=False)
+    assert kwargs["quantization_config"].load_in_4bit is True
+
+
+def test_unrecognized_dtype_raises():
+    with pytest.raises(UnsupportedDtypeCombination):
+        _loading_kwargs_for_dtype("fp8")
+
+
+def test_requires_device_map_only_for_quantized_dtypes():
+    assert _requires_device_map("int8") is True
+    assert _requires_device_map("int4") is True
+    assert _requires_device_map("fp16") is False
+    assert _requires_device_map(None) is False

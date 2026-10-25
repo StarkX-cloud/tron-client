@@ -43,6 +43,7 @@ class RunOutcome:
     peak_gpu_memory_reserved_bytes: int | None = None
     device_map: dict = field(default_factory=dict)
     generated_text: str | None = None
+    dtype: str | None = None
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -167,6 +168,7 @@ def run_workload(config: WorkloadConfig, policy: MemoryPolicy) -> RunOutcome:
             peak_gpu_memory_reserved_bytes=peak_gpu_reserved,
             device_map=dict(loaded.device_map) if isinstance(loaded.device_map, dict) else {"device": str(loaded.device_map)},
             generated_text=generated_text,
+            dtype=loaded.dtype,
             warnings=warnings,
         )
     except ImportError as exc:

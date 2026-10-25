@@ -165,13 +165,19 @@ Far beyond it (bigger GPUs, bigger models): still only medium-to-low,
 because confidence shouldn't rise just because a number is larger — it's
 still extrapolation past the one thing that was actually measured.
 
-**Known limitation, stated up front:** the advisor can recommend `int8`/
-`int4` quantized dtypes when they're what makes a model fit, but
-`BaselinePolicy`/`OffloadPolicy` don't implement quantized loading yet (no
-`bitsandbytes`/`load_in_8bit` wiring) — any such recommendation comes with
-an explicit warning that it's advisory, not something `run_workload` can
-execute as-is today. Implementing that loading path is the natural next
-step (see ROADMAP.md).
+**Quantized loading is real, not advisory.** `int8`/`int4` recommendations
+are backed by actual `bitsandbytes` quantization (`BitsAndBytesConfig`,
+the same mechanism anyone using `transformers` has access to) — both
+`BaselinePolicy` and `OffloadPolicy` load real quantized weights when
+`WorkloadConfig.dtype` requests it (`--dtype int8`/`int4` on the CLI). One
+real constraint carries through honestly: bitsandbytes doesn't support
+combining 4-bit quantization with device-map offload (only 8-bit has the
+`llm_int8_enable_fp32_cpu_offload` escape hatch), so `recommend()` never
+pairs `int4` with the offload policy, and `OffloadPolicy` itself raises a
+clear `UnsupportedDtypeCombination` (not a confusing crash) if asked to.
+Verified locally end-to-end: a real int8-quantized `pythia-70m` loads and
+generates correctly via `run_workload`, and the int4+offload rejection
+fails with the intended clear message rather than a stack trace.
 
 **Two real execution paths**, not one baseline relabeled with different
 numbers: `BaselinePolicy` loads the full model onto the device with no
@@ -258,11 +264,30 @@ behind `TRON_EFFICIENCY_RUN_MODEL_TESTS=1` (not part of the default suite,
 same convention as `tron/training/benchmark_lora.py`'s ~20-minute real run).
 
 **Known gaps:**
-- `BaselinePolicy` doesn't pass `torch_dtype` to `from_pretrained` — it
-  loads whatever dtype the checkpoint is stored in on the Hub, not
-  necessarily what `recommend()` suggested. Found during the real-package
-  GPU run (`pythia-1.4b` happened to be stored in fp16, so this coincided
-  with the advisor's recommendation — it wouldn't for an fp32 checkpoint).
+- **Fixed since the gap above was found:** `WorkloadConfig.dtype` now
+  flows into an actual `torch_dtype=`/`quantization_config=` argument in
+  both policies (`tron_efficiency/memory/policies.py`'s
+  `_loading_kwargs_for_dtype`) — `recommend()`'s dtype choice is no longer
+  disconnected from how a model actually loads. `dtype=None` (the default)
+  preserves the old pre-fix behavior exactly for backward compatibility.
+- `int8` quantization combined with `OffloadPolicy` on CPU-only hardware
+  is fragile in a way that isn't fully characterized: 100MB and
+  110-120MB CPU budgets both fail, but with *different* errors (100MB:
+  accelerate's "whole model to disk" refusal; 110-120MB:
+  `RuntimeError: Cannot access accelerator device when none is
+  available`, a CUDA-shaped error on a machine with no CUDA at all), while
+  130MB succeeds. The 110-120MB failure mode specifically suggests
+  bitsandbytes' `llm_int8_enable_fp32_cpu_offload` escape hatch may
+  internally assume a CUDA accelerator is reachable even when only
+  splitting between CPU and disk — a real quirk of a CUDA-oriented
+  library being used in a CPU-only configuration, not something this
+  project invented. The 130MB "success" could not be confirmed as a
+  genuine disk-split placement either way (`hf_device_map` isn't
+  populated the same way for quantized models as it is for plain-dtype
+  offload, so the usual placement evidence isn't available). Properly
+  characterizing this needs testing on real GPU hardware rather than
+  further guessing on CPU-only hardware — flagged for the next GPU
+  session, not resolved here.
 - `OffloadPolicy` has no viable-budget floor check — it will accept a
   total budget too small for the model+GPU's fixed overhead to ever
   succeed under, regardless of headroom split, and just OOM with

@@ -71,19 +71,20 @@ class Recommendation:
 
 
 def _check_quantization_executability(rec: Recommendation) -> None:
-    """int8/int4 are recommendable sizes, but BaselinePolicy/OffloadPolicy
-    (tron_efficiency.memory.policies) only implement fp32/native-dtype
-    loading today -- there is no bitsandbytes/load_in_8bit wiring yet. A
-    recommendation of int8/int4 is therefore advisory (it tells you what
-    dtype *would* make this fit), not something run_workload can execute
-    as-is. Said explicitly so a recommendation is never mistaken for a
-    ready-to-run config."""
-    if rec.dtype in ("int8", "int4"):
+    """int8/int4 quantized loading via bitsandbytes (BitsAndBytesConfig) is
+    real and wired into both BaselinePolicy and OffloadPolicy -- not
+    advisory-only. The one real constraint bitsandbytes itself imposes:
+    4-bit quantization cannot combine with device_map offload (no
+    fp32-cpu-offload escape hatch for int4, unlike int8), so recommend()
+    never recommends policy="offload" with dtype="int4" (see
+    _recommend_gpu) -- this check exists as a safety net in case that
+    invariant is ever broken by a future edit, not because it's expected
+    to fire in normal operation."""
+    if rec.dtype == "int4" and rec.policy == "offload":
         rec.warnings.append(
-            f"this recommendation assumes {rec.dtype} quantized weights, but "
-            "quantized loading is not yet implemented in BaselinePolicy/OffloadPolicy "
-            "(no bitsandbytes/load_in_8bit wiring) -- this dtype is advisory, not "
-            "executable via run_workload as-is. See ROADMAP.md."
+            "int4 + offload is not a supported bitsandbytes combination -- this "
+            "recommendation would fail if executed. This should not happen; "
+            "recommend() is supposed to use int8 for the offload case."
         )
 
 
@@ -159,13 +160,17 @@ def _recommend_gpu(model_name, size, hardware, gpu_budget_bytes_override, ration
                 warnings=warnings,
             )
 
-    # Nothing fits without offload -- recommend OffloadPolicy with the
-    # smallest-footprint dtype, at the full available budget as the
-    # *nominal* memory_budget_bytes (OffloadPolicy reserves headroom itself).
-    dtype = GPU_DTYPE_CANDIDATES[-1]
+    # Nothing fits without offload -- recommend OffloadPolicy. Dtype here is
+    # deliberately "int8", not int4: bitsandbytes' CPU-offload escape hatch
+    # (llm_int8_enable_fp32_cpu_offload) only exists for 8-bit quantization.
+    # 4-bit does not support combining with device_map offload at all --
+    # OffloadPolicy raises UnsupportedDtypeCombination if asked to, so
+    # recommending int4 here would hand back a config guaranteed to fail.
+    dtype = "int8"
     rationale.append(
-        f"even {dtype} weights ({size.bytes_by_dtype[dtype]:,} bytes) don't fit without "
-        "offload -- recommending OffloadPolicy."
+        f"even int4 weights ({size.bytes_by_dtype['int4']:,} bytes) don't fit without "
+        "offload -- recommending OffloadPolicy with int8 (int4 doesn't support "
+        "combining with offload in bitsandbytes)."
     )
 
     if available_bytes < CONFIRMED_FAILING_GPU_BUDGET_BYTES:

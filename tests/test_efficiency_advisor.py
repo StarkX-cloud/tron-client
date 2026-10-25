@@ -149,14 +149,30 @@ def test_recommend_gpu_offload_at_confirmed_working_budget_is_not_low_confidence
     assert rec.confidence in ("medium", "high")
 
 
-def test_recommend_warns_when_quantized_dtype_recommended():
+def test_recommend_picks_quantized_dtype_without_unsupported_warning():
+    # Quantized loading (bitsandbytes) is real now -- this should NOT carry
+    # the old "not yet implemented" warning. See
+    # test_recommend_never_pairs_int4_with_offload for the one real
+    # constraint bitsandbytes does impose.
     rec = recommend(
         "fake/model",
         hardware=_fake_gpu_hardware(vram_mb=700),
         size_estimate=_fake_size_estimate(400_000_000),
     )
     assert rec.dtype in ("int8", "int4")
-    assert any("not yet implemented" in w for w in rec.warnings)
+    assert not any("not yet implemented" in w for w in rec.warnings)
+
+
+def test_recommend_never_pairs_int4_with_offload():
+    # bitsandbytes doesn't support int4 + device_map offload -- recommend()
+    # must use int8 for any offload recommendation, never int4.
+    rec = recommend(
+        "fake/model",
+        hardware=_fake_gpu_hardware(vram_mb=150),
+        size_estimate=_fake_size_estimate(400_000_000),
+    )
+    assert rec.policy == "offload"
+    assert rec.dtype == "int8"
 
 
 def test_recommend_handles_unestimatable_model_gracefully():

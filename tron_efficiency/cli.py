@@ -29,7 +29,8 @@ def _print_outcome(result) -> None:
         print(f"[{o.policy_name}] FAILED: {o.error}")
         return
     print(
-        f"[{o.policy_name}] load={o.load_time_seconds:.3f}s "
+        f"[{o.policy_name}] dtype={o.dtype or 'checkpoint-default'} "
+        f"load={o.load_time_seconds:.3f}s "
         f"ttft={o.time_to_first_token_seconds:.3f}s "
         f"e2e={o.end_to_end_latency_seconds:.3f}s "
         f"tok/s={o.tokens_per_second:.2f} "
@@ -47,6 +48,7 @@ def _build_config(args) -> WorkloadConfig:
         max_new_tokens=args.max_new_tokens,
         batch_size=args.batch_size,
         device=args.device,
+        dtype=args.dtype,
     )
 
 
@@ -151,6 +153,14 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--max-new-tokens", type=int, default=32)
         p.add_argument("--batch-size", type=int, default=1)
         p.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
+        p.add_argument(
+            "--dtype",
+            default=None,
+            choices=["fp32", "fp16", "bf16", "int8", "int4"],
+            help="explicit precision to load the model in (default: whatever the "
+            "checkpoint is stored as, unchanged). int8/int4 use real bitsandbytes "
+            "quantization; int4 cannot combine with --policy offload.",
+        )
 
     run_p = sub.add_parser("run", help="run one workload under one policy")
     add_workload_args(run_p)

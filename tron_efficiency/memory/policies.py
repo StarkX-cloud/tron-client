@@ -40,6 +40,66 @@ class LoadedModel:
     device_map: Any
     memory_budget_bytes: int | None
     offload_folder: str | None
+    dtype: str | None = None
+
+
+class UnsupportedDtypeCombination(Exception):
+    """Raised when a (dtype, policy, device) combination isn't something
+    bitsandbytes/transformers actually supports, so the caller fails with a
+    clear message instead of a confusing crash deep in from_pretrained."""
+
+
+def _loading_kwargs_for_dtype(dtype: str | None, allow_cpu_offload: bool = False) -> dict:
+    """What to pass to ``from_pretrained`` for a given requested dtype.
+
+    Real gap this closes (found during the GPU validation run — see
+    writeup/compute-efficiency-gpu-validation.md): ``BaselinePolicy`` used
+    to pass nothing at all, so it silently loaded whatever dtype a
+    checkpoint happened to be stored in on the Hub — only coincidentally
+    matching what ``recommend()`` suggested. ``dtype=None`` preserves that
+    old behavior exactly (no kwargs added) for backward compatibility;
+    every other value is now an explicit, real instruction to
+    ``from_pretrained``, not a suggestion that gets silently ignored.
+
+    ``int8``/``int4`` use real bitsandbytes quantization (``load_in_8bit``/
+    ``load_in_4bit`` via ``BitsAndBytesConfig``) — not a TRON invention,
+    the same mechanism anyone using ``transformers`` has access to. A
+    quantized model must be placed via ``device_map`` at load time and can
+    never be moved with ``.to()`` afterward (transformers raises if you
+    try), which is why callers of this function also need
+    ``requires_device_map`` below to know not to call ``.to()``.
+    """
+    if dtype is None:
+        return {}
+    if dtype in ("fp32", "fp16", "bf16"):
+        import torch
+
+        torch_dtype = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}[dtype]
+        return {"torch_dtype": torch_dtype}
+    if dtype in ("int8", "int4"):
+        from transformers import BitsAndBytesConfig
+
+        if dtype == "int8":
+            return {
+                "quantization_config": BitsAndBytesConfig(
+                    load_in_8bit=True, llm_int8_enable_fp32_cpu_offload=allow_cpu_offload
+                )
+            }
+        if allow_cpu_offload:
+            raise UnsupportedDtypeCombination(
+                "4-bit quantization (int4) does not support combining with CPU/disk "
+                "offload -- bitsandbytes only offers the fp32-cpu-offload escape hatch "
+                "for 8-bit (int8). Use int8 if you need both quantization and offload, "
+                "or drop offload if int4 is required."
+            )
+        return {"quantization_config": BitsAndBytesConfig(load_in_4bit=True)}
+    raise UnsupportedDtypeCombination(f"unrecognized dtype: {dtype!r}")
+
+
+def _requires_device_map(dtype: str | None) -> bool:
+    """Quantized models (int8/int4) must be placed via device_map at load
+    time; calling .to(device) on one afterward raises in transformers."""
+    return dtype in ("int8", "int4")
 
 
 class MemoryPolicy:
@@ -61,8 +121,15 @@ class BaselinePolicy(MemoryPolicy):
 
     def load_model(self, config: WorkloadConfig) -> LoadedModel:
         tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-        model = AutoModelForCausalLM.from_pretrained(config.model_name)
-        model = model.to(config.device)
+        kwargs = _loading_kwargs_for_dtype(config.dtype)
+
+        if _requires_device_map(config.dtype):
+            # Quantized weights are placed at load time, not moved after.
+            kwargs["device_map"] = "cpu" if config.device == "cpu" else {"": 0}
+            model = AutoModelForCausalLM.from_pretrained(config.model_name, **kwargs)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(config.model_name, **kwargs)
+            model = model.to(config.device)
         model.eval()
         return LoadedModel(
             model=model,
@@ -71,6 +138,7 @@ class BaselinePolicy(MemoryPolicy):
             device_map=config.device,
             memory_budget_bytes=None,
             offload_folder=None,
+            dtype=config.dtype,
         )
 
 
@@ -160,11 +228,19 @@ class OffloadPolicy(MemoryPolicy):
             config.device, self.memory_budget_bytes, self.gpu_activation_headroom_fraction
         )
 
+        # int4 + offload isn't a supported bitsandbytes combination (see
+        # _loading_kwargs_for_dtype's docstring) -- raises a clear
+        # UnsupportedDtypeCombination rather than attempting it and hitting
+        # a confusing failure deep inside from_pretrained. The caller
+        # (run_workload) catches this the same way it catches ImportError.
+        dtype_kwargs = _loading_kwargs_for_dtype(config.dtype, allow_cpu_offload=True)
+
         model = AutoModelForCausalLM.from_pretrained(
             config.model_name,
             device_map="auto",
             max_memory=max_memory,
             offload_folder=offload_folder,
+            **dtype_kwargs,
         )
         model.eval()
         loaded = LoadedModel(
@@ -174,6 +250,7 @@ class OffloadPolicy(MemoryPolicy):
             device_map=dict(getattr(model, "hf_device_map", {})),
             memory_budget_bytes=self.memory_budget_bytes,
             offload_folder=offload_folder,
+            dtype=config.dtype,
         )
         loaded.device_map["_mechanism"] = effective_mechanism
         # The weight-placement budget actually handed to accelerate, which
