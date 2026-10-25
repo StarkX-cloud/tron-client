@@ -463,3 +463,51 @@ technical design behind each phase.
   said twice in the writeup on purpose), validated at real tower counts
   (4, not hundreds), and everything already listed above as not done for
   the underlying distributed-training machinery.
+- [x] **New, separate initiative: TRON Compute Efficiency Engine v0.1**
+  (`tron_efficiency/`) — not part of the distributed-training substrate
+  above, zero coupling to `queue_server.py`. Different question: can a
+  memory-constrained inference execution path run under a tighter memory
+  budget than a plain baseline, and what's the real performance cost?
+  Two real paths (`BaselinePolicy` vs. `OffloadPolicy`, the latter using
+  Hugging Face Accelerate's actual `device_map`/`max_memory`/
+  `offload_folder` mechanism, not a relabeled baseline), a benchmark
+  engine that flags output divergence across policies as a correctness
+  issue rather than reporting a timing "win," JSON/CSV/markdown report
+  output with per-metric winners and explicitly-labeled cost estimates, a
+  CLI, a standalone FastAPI app (`TRON_EFFICIENCY_PORT`, default 9100),
+  and a dashboard mounted the same way `/grid` is. See the README's
+  "Compute Efficiency Engine (v0.1)" section for usage.
+  **Real measured result** (`pythia-70m`, CPU, 32 tokens, 100MB CPU
+  budget vs. ~134MB model footprint —
+  `writeup/compute-efficiency-sample-report.md`): the constrained path is
+  **~5.8x slower end-to-end** (10.2s vs 1.8s; 3.1 vs 18.0 tok/s) with
+  only marginally lower peak memory (464MB vs 487MB) — a negative/mixed
+  result, reported honestly as one, not a TRON win.
+  **Not yet done:**
+  - No real GPU validation. This dev machine has no CUDA
+    (`torch.cuda.is_available()` is `False`); the GPU-budget code path
+    (`OffloadPolicy` targeting `max_memory={0: budget, ...}` when
+    `device="cuda"`) exists and is implemented per the spec but has never
+    actually run against a GPU. What *was* validated here is the CPU
+    analog — constraining CPU RAM and forcing genuine disk offload — and
+    every hardware report/result/warning says so explicitly.
+  - The spec's actual "critical experiment" (baseline *fails* under a
+    budget that the constrained path *succeeds* under) was not
+    demonstrated — `pythia-70m`'s ~134MB footprint fits trivially in this
+    machine's RAM regardless of a nominal CPU budget, so the baseline
+    never fails. Would need either a much larger model or an OS-level
+    memory limit (no portable one exists on Windows for this), not
+    attempted here.
+  - Single model family tested; no sweep across model sizes/budgets yet
+    (the engine supports it, the CLI doesn't expose a sweep flag).
+  - Peak CPU memory is a 50ms-interval polling-thread approximation, not
+    a true OS peak-RSS reading (no portable equivalent on Windows).
+  Tests: `tests/test_efficiency_hardware.py`,
+  `tests/test_efficiency_results.py`,
+  `tests/test_efficiency_memory_policy.py`, `tests/test_efficiency_api.py`
+  (22 fast unit/API tests, no model load) plus
+  `tests/test_efficiency_workload_real.py` (3 real-model tests against
+  `pythia-70m` on CPU — gated behind `TRON_EFFICIENCY_RUN_MODEL_TESTS=1`,
+  kept out of the default suite the same way
+  `tron/training/benchmark_lora.py`'s ~20-minute real run is). 219
+  passing in the default suite (was 197) — nothing under `tron/` touched.
