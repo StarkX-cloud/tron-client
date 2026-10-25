@@ -551,14 +551,12 @@ technical design behind each phase.
   checkpoint's storage format, not because `recommend()`'s dtype choice is
   actually wired into how `BaselinePolicy` loads a model. A model stored in
   fp32 would silently load fp32 regardless of what was recommended.
-  **Not yet done:**
-  - The dtype-wiring gap just found: no code path connects `recommend()`'s
-    dtype choice to an actual `torch_dtype=` argument anywhere in
-    `tron_efficiency/memory/policies.py`.
-  - `OffloadPolicy` has no viable-budget floor check — a budget too small
-    for the model+GPU's fixed overhead just OOMs with accelerate's raw
-    error instead of a clearer diagnostic. Found during the fix
-    re-verification; not implemented.
+  **Not yet done at the time, both addressed in later entries below:**
+  - ~~The dtype-wiring gap just found~~ — fixed in the "Real quantized
+    loading" entry below.
+  - ~~`OffloadPolicy` has no viable-budget floor check~~ — addressed (not
+    with a numeric floor, deliberately — see the "Clarify confusing
+    underlying errors" entry below for why) in a later entry.
   - Single model family tested per environment (`pythia-70m` CPU,
     `pythia-410m` the one GPU run); no sweep across model sizes/budgets
     yet (the engine supports it, the CLI doesn't expose a sweep flag).
@@ -665,3 +663,28 @@ technical design behind each phase.
   (`test_recommend_picks_quantized_dtype_without_unsupported_warning`,
   `test_recommend_never_pairs_int4_with_offload`). `bitsandbytes` added
   to `requirements-training.txt`.
+- [x] **Clarify confusing underlying errors instead of inventing a
+  numeric budget floor** (same day). `OffloadPolicy`'s "no viable-budget
+  floor check" gap, flagged repeatedly above, can't honestly be closed
+  with a hard-coded minimum byte threshold — the real floor is
+  device/model-dependent and this project only has two confirmed real
+  data points loosely bounding it (600MB fails, 1.2GB works, for one
+  model+GPU pair). A universal number would be exactly the kind of
+  unearned confidence this project has been deliberately avoiding.
+  Instead: `_clarify_error()` in `workloads/runner.py` recognizes three
+  known-confusing failure patterns already hit for real during
+  development and rewrites them into actionable messages that cite what
+  was actually measured, while preserving the original error text:
+  accelerate's "offload the whole model to the disk" refusal (explains
+  the real cause and the fix: raise the budget); the CUDA-shaped
+  "Cannot access accelerator device when none is available" error found
+  testing int8+offload on CPU-only hardware (names the known quirk,
+  points at this file's entry above instead of looking unrelated); CUDA
+  OOM specifically under `OffloadPolicy` on a CUDA device (cites the two
+  real confirmed data points, scoped so a baseline OOM doesn't get a
+  misleading citation). Everything else passes through unchanged — this
+  clarifies known patterns, it doesn't mask unknown ones. Verified
+  against a real failure (the 110MB int8+offload CPU case) that the
+  clarified message actually appears instead of the raw error.
+  Tests: 6 new cases in `tests/test_efficiency_error_clarity.py`.
+  248 passing (was 242).

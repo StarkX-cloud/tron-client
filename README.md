@@ -288,11 +288,17 @@ same convention as `tron/training/benchmark_lora.py`'s ~20-minute real run).
   characterizing this needs testing on real GPU hardware rather than
   further guessing on CPU-only hardware — flagged for the next GPU
   session, not resolved here.
-- `OffloadPolicy` has no viable-budget floor check — it will accept a
-  total budget too small for the model+GPU's fixed overhead to ever
-  succeed under, regardless of headroom split, and just OOM with
-  accelerate's raw error rather than a clearer diagnostic (found during
-  the fix re-verification above; not implemented).
+- **Addressed, deliberately not with a numeric floor:** `OffloadPolicy`
+  still accepts a budget too small to ever succeed under (there is no
+  honest universal minimum byte count to check against — the real floor
+  is device/model-dependent and only loosely bounded by the two confirmed
+  data points above). What changed: `workloads/runner.py`'s
+  `_clarify_error` now recognizes the specific confusing failures this
+  actually produces (accelerate's "whole model to disk" refusal, CUDA OOM
+  under offload) and rewrites them into actionable messages citing what
+  was actually measured, instead of leaving the raw underlying error as
+  the only information. A pre-flight numeric check would have meant
+  guessing a number this project doesn't have evidence for.
 - Single model family tested per environment (`pythia-70m` on CPU,
   `pythia-410m` on the one GPU run); no sweep across model sizes or memory
   budgets yet (`benchmarks/engine.py` supports it — `cli.py` just doesn't
