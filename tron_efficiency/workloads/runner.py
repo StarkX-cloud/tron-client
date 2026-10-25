@@ -180,9 +180,49 @@ def run_workload(config: WorkloadConfig, policy: MemoryPolicy) -> RunOutcome:
         )
     except Exception as exc:  # noqa: BLE001 - deliberately broad: must never crash the caller
         sampler.stop()
-        message = str(exc)
-        if "out of memory" in message.lower() or "cuda error" in message.lower():
-            error = f"out of memory under this policy's budget: {message}"
-        else:
-            error = f"{type(exc).__name__}: {message}"
-        return RunOutcome(success=False, policy_name=policy.name, error=error)
+        return RunOutcome(
+            success=False, policy_name=policy.name, error=_clarify_error(exc, policy.name, config)
+        )
+
+
+def _clarify_error(exc: Exception, policy_name: str, config: WorkloadConfig) -> str:
+    """Turn a handful of known-confusing underlying errors into something
+    actionable, grounded in what this project has actually measured --
+    never a numeric "minimum budget" invented without evidence (the real
+    floor is device/model-dependent and only loosely bounded so far; see
+    writeup/compute-efficiency-gpu-validation.md). Everything not matched
+    here falls through unchanged -- this clarifies known patterns, it does
+    not mask unknown ones.
+    """
+    message = str(exc)
+    lower = message.lower()
+
+    if "offload the whole model to the disk" in lower:
+        return (
+            "budget too small for OffloadPolicy to place ANY weights on "
+            f"{config.device} -- accelerate refuses to spill 100% to disk this way "
+            "(that needs its own disk_offload() path, which this project doesn't wire "
+            f"up). Raise memory_budget_bytes and try again. Original error: {message}"
+        )
+
+    if "cannot access accelerator device when none is available" in lower:
+        return (
+            "this looks like a CUDA-dependent code path running on hardware with no "
+            "CUDA available -- seen during development specifically with int8 "
+            "quantization combined with OffloadPolicy on CPU-only hardware at some "
+            "budgets (see ROADMAP.md's int8+offload entry; not yet fully characterized). "
+            f"Original error: {message}"
+        )
+
+    if "out of memory" in lower or "cuda error" in lower:
+        if config.device == "cuda" and policy_name == "offload":
+            return (
+                "CUDA out of memory under this budget. The only two confirmed real data "
+                "points this project has for a different model+GPU (pythia-410m on a T4, "
+                "see writeup/compute-efficiency-gpu-validation.md): a 600MB total budget "
+                "failed, a 1.2GB total budget worked. Your budget may be below a similar "
+                f"floor for this model+GPU -- try raising it substantially. Original error: {message}"
+            )
+        return f"out of memory under this policy's budget: {message}"
+
+    return f"{type(exc).__name__}: {message}"
