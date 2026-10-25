@@ -553,3 +553,37 @@ technical design behind each phase.
   kept out of the default suite the same way
   `tron/training/benchmark_lora.py`'s ~20-minute real run is). 219
   passing in the default suite (was 197) — nothing under `tron/` touched.
+- [x] **Automatic policy selection — `tron_efficiency/advisor/`** (same
+  day). The product layer on top of the raw mechanism: instead of a human
+  hand-picking `memory_budget_bytes`, `recommend(model_name, hardware)`
+  fetches the model's `config.json` (not its weights — no multi-GB
+  download) and analytically estimates its real parameter count from the
+  architecture's shape, then picks a device/dtype/policy and, for
+  `OffloadPolicy`, the nominal budget to pass it. The param-count formula
+  is validated to within 0.04% against `pythia-70m`'s real measured size
+  (70,398,464 estimated vs. 70,426,624 real, confirmed directly against
+  the loaded model). Confidence (`high`/`medium`/`low`) and warnings are
+  explicitly calibrated against the only two real GPU data points this
+  project has — the 600MB-fails / 1.2GB-works pair from the GPU
+  validation above — never reported as higher confidence than one real
+  measurement earns. CLI (`recommend --model <name>`), API
+  (`GET /recommend`), and dashboard form all wired in.
+  **Known gap, stated in every relevant recommendation:** the advisor can
+  recommend `int8`/`int4` when that's what makes a model fit, but
+  `BaselinePolicy`/`OffloadPolicy` don't implement quantized loading yet
+  (no `bitsandbytes`/`load_in_8bit` wiring) — such a recommendation is
+  explicitly flagged as advisory, not executable via `run_workload` as it
+  stands. Implementing real quantized loading is the natural next step —
+  it's also the other major lever (alongside offload) for the actual
+  commercial pitch (cheaper hardware per model served).
+  **Other not-yet-done:** no handling for architectures the analytical
+  formula can't estimate (returns `param_count=0`, falls back to the
+  safest CPU recommendation rather than guessing); the CPU-side viable-
+  budget logic uses a flat 1.5x safety margin, not anything empirically
+  tuned the way the GPU thresholds are (no CPU equivalent of the
+  600MB/1.2GB data points exists yet).
+  Tests: `tests/test_efficiency_advisor.py` (11 cases — formula accuracy
+  against a real pinned architecture, CPU/GPU branch coverage, confidence
+  calibration at and around both confirmed data points, the quantization-
+  executability warning) plus `tests/test_efficiency_api.py`'s
+  `test_recommend_endpoint`. 233 passing (was 221).

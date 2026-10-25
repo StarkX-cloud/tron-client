@@ -132,6 +132,7 @@ Install the same optional deps used by the training demo above
 
 ```bash
 python -m tron_efficiency.cli hardware                 # what this machine actually has
+python -m tron_efficiency.cli recommend --model EleutherAI/pythia-70m
 python -m tron_efficiency.cli run --policy baseline     # plain load + generate
 python -m tron_efficiency.cli run --policy offload --memory-budget-mb 100
 python -m tron_efficiency.cli compare --memory-budget-mb 100 --hourly-rate 0.50
@@ -141,6 +142,36 @@ python -m tron_efficiency.cli serve                      # API + dashboard on :9
 The dashboard is served at `http://localhost:9100/dashboard/`, mounted the
 same way `/grid` is mounted on `queue_server.py` — a separate static
 directory, no shared frontend framework.
+
+### Automatic policy selection (`tron_efficiency/advisor/`)
+
+`recommend --model <name>` answers "what config should I even use?" without
+hand-tuning a memory budget: it fetches the model's `config.json` (not its
+weights — fast, no multi-GB download) and analytically estimates its real
+parameter count from the architecture's shape, validated to within 0.04%
+against `pythia-70m`'s actual measured size (70,398,464 estimated vs.
+70,426,624 real). From that, plus detected (or overridden) hardware, it
+picks a device, dtype, and policy, and — for `OffloadPolicy` — the nominal
+`memory_budget_bytes` to pass it.
+
+Every recommendation carries a `confidence` (`high`/`medium`/`low`) and
+explicit `warnings`, calibrated against the only two real GPU data points
+this project has (see the GPU validation write-up): a 600MB total budget
+confirmed to fail, a 1.2GB total budget confirmed to work, for
+`pythia-410m` on a T4. Below the confirmed-failing point: low confidence,
+explicit "probably won't work" warning. Between the two: low confidence,
+"unknown, could go either way." Near the confirmed-working point: medium.
+Far beyond it (bigger GPUs, bigger models): still only medium-to-low,
+because confidence shouldn't rise just because a number is larger — it's
+still extrapolation past the one thing that was actually measured.
+
+**Known limitation, stated up front:** the advisor can recommend `int8`/
+`int4` quantized dtypes when they're what makes a model fit, but
+`BaselinePolicy`/`OffloadPolicy` don't implement quantized loading yet (no
+`bitsandbytes`/`load_in_8bit` wiring) — any such recommendation comes with
+an explicit warning that it's advisory, not something `run_workload` can
+execute as-is today. Implementing that loading path is the natural next
+step (see ROADMAP.md).
 
 **Two real execution paths**, not one baseline relabeled with different
 numbers: `BaselinePolicy` loads the full model onto the device with no

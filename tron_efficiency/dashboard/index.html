@@ -98,6 +98,16 @@
   </section>
 
   <section>
+    <h2>Get a recommendation</h2>
+    <form id="recommend-form">
+      <label>Model <input name="model" value="EleutherAI/pythia-70m" /></label>
+      <label>GPU budget override (MB, optional) <input name="gpu_budget_mb" type="number" placeholder="use detected VRAM" /></label>
+      <button type="submit" id="recommend-button">Recommend</button>
+    </form>
+    <div id="recommend-output"></div>
+  </section>
+
+  <section>
     <h2>Run a workload</h2>
     <form id="run-form">
       <label>Model <input name="model" value="EleutherAI/pythia-70m" /></label>
@@ -190,6 +200,37 @@ document.getElementById('run-form').addEventListener('submit', async (e) => {
     await loadRuns();
   } catch (err) {
     log.textContent = 'Request failed: ' + err;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('recommend-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = document.getElementById('recommend-button');
+  const output = document.getElementById('recommend-output');
+  const data = Object.fromEntries(new FormData(e.target).entries());
+  const params = new URLSearchParams({ model: data.model });
+  if (data.gpu_budget_mb) params.set('gpu_budget_mb', data.gpu_budget_mb);
+  button.disabled = true;
+  output.innerHTML = '<p class="warn">Fetching model config and computing a recommendation…</p>';
+  try {
+    const res = await fetch('/recommend?' + params.toString());
+    const rec = await res.json();
+    const confClass = rec.confidence === 'high' ? 'ok' : (rec.confidence === 'low' ? 'fail' : 'warn');
+    output.innerHTML = `
+      <div class="stat" style="margin-top:10px;">
+        <div class="label">Recommendation</div>
+        <div class="value">${rec.device} / ${rec.dtype} / ${rec.policy}</div>
+      </div>
+      <p>Confidence: <span class="${confClass}">${rec.confidence}</span>
+      ${rec.memory_budget_bytes ? ` — memory_budget_bytes: ${rec.memory_budget_bytes.toLocaleString()}` : ''}</p>
+      <p class="warn">Estimated params: ${rec.estimated_param_count.toLocaleString()} (${rec.param_count_is_estimate ? 'estimate from config, not measured' : 'measured'})</p>
+      ${rec.rationale.map(r => `<div class="warn">reason: ${r}</div>`).join('')}
+      ${rec.warnings.map(w => `<div class="warn" style="color:#ff6b6b;">warning: ${w}</div>`).join('')}
+    `;
+  } catch (err) {
+    output.innerHTML = '<p class="fail">Request failed: ' + err + '</p>';
   } finally {
     button.disabled = false;
   }

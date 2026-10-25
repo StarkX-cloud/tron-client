@@ -87,3 +87,24 @@ def test_report_endpoint(client):
     res = client.get("/report")
     assert res.status_code == 200
     assert "Benchmark report" in res.text
+
+
+def test_recommend_endpoint(client, monkeypatch):
+    import tron_efficiency.api.app as app_module
+    from tron_efficiency.advisor.recommend import Recommendation
+
+    def fake_recommend(model_name, hardware=None, gpu_budget_bytes_override=None):
+        assert model_name == "fake/model"
+        assert gpu_budget_bytes_override == 512 * 1024 * 1024
+        return Recommendation(
+            model_name=model_name, estimated_param_count=1000, param_count_is_estimate=True,
+            device="cpu", dtype="fp32", policy="baseline", memory_budget_bytes=None,
+            confidence="medium", rationale=["stub"], warnings=[],
+        )
+
+    monkeypatch.setattr(app_module, "_recommend", fake_recommend)
+    res = client.get("/recommend", params={"model": "fake/model", "gpu_budget_mb": 512})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["device"] == "cpu"
+    assert body["confidence"] == "medium"

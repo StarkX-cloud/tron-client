@@ -20,6 +20,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from tron_efficiency.advisor.recommend import recommend as _recommend
 from tron_efficiency.hardware.detect import detect_hardware
 from tron_efficiency.memory.policies import BaselinePolicy, OffloadPolicy
 from tron_efficiency.results.report import generate_report
@@ -52,6 +53,12 @@ def _build_policy(req: RunRequest):
 @app.get("/hardware")
 def get_hardware():
     return detect_hardware().to_dict()
+
+
+@app.get("/recommend")
+def get_recommendation(model: str, gpu_budget_mb: int | None = None):
+    gpu_budget_bytes = gpu_budget_mb * 1024 * 1024 if gpu_budget_mb else None
+    return _recommend(model, gpu_budget_bytes_override=gpu_budget_bytes).to_dict()
 
 
 @app.post("/runs")

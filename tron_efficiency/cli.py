@@ -1,6 +1,7 @@
 """CLI for the TRON Compute Efficiency Engine.
 
     python -m tron_efficiency.cli hardware
+    python -m tron_efficiency.cli recommend --model meta-llama/Llama-3.2-1B
     python -m tron_efficiency.cli run --policy baseline
     python -m tron_efficiency.cli run --policy offload --memory-budget-mb 128
     python -m tron_efficiency.cli compare --memory-budget-mb 128
@@ -62,6 +63,17 @@ def cmd_hardware(args) -> int:
     return 0
 
 
+def cmd_recommend(args) -> int:
+    from tron_efficiency.advisor.recommend import recommend
+
+    gpu_budget_bytes = args.gpu_budget_mb * 1024 * 1024 if args.gpu_budget_mb else None
+    rec = recommend(args.model, gpu_budget_bytes_override=gpu_budget_bytes)
+    print(json.dumps(rec.to_dict(), indent=2))
+    if rec.confidence == "low":
+        print(f"\nNOTE: confidence is LOW -- read the warnings above before trusting this.", file=sys.stderr)
+    return 0
+
+
 def cmd_run(args) -> int:
     from tron_efficiency.results.schema import BenchmarkResult
 
@@ -120,6 +132,18 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("hardware", help="report detected hardware").set_defaults(
         func=cmd_hardware
     )
+
+    recommend_p = sub.add_parser(
+        "recommend", help="auto-pick a dtype/policy/budget for a model on this hardware"
+    )
+    recommend_p.add_argument("--model", required=True)
+    recommend_p.add_argument(
+        "--gpu-budget-mb",
+        type=int,
+        default=None,
+        help="override detected GPU VRAM with this budget (MB) instead of using the full card",
+    )
+    recommend_p.set_defaults(func=cmd_recommend)
 
     def add_workload_args(p):
         p.add_argument("--model", default="EleutherAI/pythia-70m")
