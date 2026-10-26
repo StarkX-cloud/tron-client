@@ -688,3 +688,34 @@ technical design behind each phase.
   clarified message actually appears instead of the raw error.
   Tests: 6 new cases in `tests/test_efficiency_error_clarity.py`.
   248 passing (was 242).
+- [x] **Budget sweep — real tradeoff curve instead of isolated two-point
+  comparisons** (same day). `benchmarks/engine.py`'s `run_budget_sweep`
+  runs the same workload once per memory budget (plus one unconstrained
+  baseline), producing one `BenchmarkResult` per budget — each an
+  independent real measurement, nothing interpolated between points.
+  `results/report.py`'s `generate_sweep_report` labels rows by budget
+  (`offload @ 100MB`, not just `offload` colliding across every budget
+  the way `generate_report`'s column-per-policy-name layout would).
+  Wired into `cli.py` (`sweep --memory-budget-mb-list 100,150,250`),
+  `api/app.py` (`POST /sweep`), and a dashboard form.
+  **Real example run** (`pythia-70m`, CPU, 3 budgets — full numbers in
+  `writeup/compute-efficiency-budget-sweep-example.md`): throughput holds
+  essentially flat (~33 tok/s) from 150MB to 250MB, matching baseline,
+  then hits a real cliff at 100MB — **8.6x throughput collapse** (32.7 →
+  3.8 tok/s) for only an **8.6% memory saving** (490MB → 448MB). This is
+  the same "doesn't degrade gracefully, falls off a cliff" shape the
+  bigger GPU result (1.4B params on a T4) showed, now demonstrated with
+  three real points on one curve instead of two isolated numbers from
+  different sessions.
+  **Honest scope:** sweeping *model sizes* automatically is still not
+  built — each model is its own multi-GB download with its own real
+  cost, left as an explicit per-model decision rather than something
+  this project downloads on your behalf. One run per budget point (no
+  repeated trials for variance) — good enough to show the cliff shape is
+  real, not a statistically rigorous curve.
+  Tests: 5 new cases in `tests/test_efficiency_benchmarks_engine.py`
+  (baseline inclusion, budget ordering, headroom-fraction passthrough,
+  correctness-divergence check still firing across a sweep), 6 new in
+  `tests/test_efficiency_results.py` (sweep report row labeling/ordering/
+  edge cases), 2 new in `tests/test_efficiency_api.py` (`/sweep`
+  endpoint, with and without baseline). 260 passing (was 248).

@@ -89,6 +89,61 @@ def test_report_endpoint(client):
     assert "Benchmark report" in res.text
 
 
+def test_sweep_endpoint(client, monkeypatch):
+    # The sweep route calls benchmarks.engine.run_budget_sweep, which calls
+    # run_workload via its own module-level import (engine.py), not via
+    # api.app -- patch it there, not on app_module like the /runs fixture
+    # patches for the plain run route.
+    import tron_efficiency.benchmarks.engine as engine_module
+
+    def fake_run_workload(config, policy):
+        return RunOutcome(
+            success=True,
+            policy_name=policy.name,
+            load_time_seconds=0.01,
+            time_to_first_token_seconds=0.001,
+            end_to_end_latency_seconds=0.02,
+            tokens_generated=config.max_new_tokens,
+            tokens_per_second=config.max_new_tokens / 0.02,
+            peak_cpu_memory_bytes=123456,
+            generated_text="stubbed output",
+        )
+
+    monkeypatch.setattr(engine_module, "run_workload", fake_run_workload)
+    res = client.post(
+        "/sweep",
+        json={"model": "fake/model", "memory_budget_mb_list": [50, 100]},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["results"]) == 3  # baseline + 2 budgets
+    assert "Budget sweep report" in body["report"]
+
+
+def test_sweep_endpoint_without_baseline(client, monkeypatch):
+    import tron_efficiency.benchmarks.engine as engine_module
+
+    def fake_run_workload(config, policy):
+        return RunOutcome(
+            success=True, policy_name=policy.name, load_time_seconds=0.01,
+            time_to_first_token_seconds=0.001, end_to_end_latency_seconds=0.02,
+            tokens_generated=config.max_new_tokens, tokens_per_second=1.0,
+            peak_cpu_memory_bytes=1000, generated_text="x",
+        )
+
+    monkeypatch.setattr(engine_module, "run_workload", fake_run_workload)
+    res = client.post(
+        "/sweep",
+        json={
+            "model": "fake/model",
+            "memory_budget_mb_list": [50, 100],
+            "include_baseline": False,
+        },
+    )
+    assert res.status_code == 200
+    assert len(res.json()["results"]) == 2
+
+
 def test_recommend_endpoint(client, monkeypatch):
     import tron_efficiency.api.app as app_module
     from tron_efficiency.advisor.recommend import Recommendation

@@ -122,6 +122,18 @@
   </section>
 
   <section>
+    <h2>Budget sweep (real tradeoff curve)</h2>
+    <form id="sweep-form">
+      <label>Model <input name="model" value="EleutherAI/pythia-70m" /></label>
+      <label>Device <select name="device"><option value="cpu">cpu</option><option value="cuda">cuda</option></select></label>
+      <label>Max new tokens <input name="max_new_tokens" type="number" value="16" /></label>
+      <label>Budgets (MB, comma-separated) <input name="memory_budget_mb_list" value="100,150,250" /></label>
+      <button type="submit" id="sweep-button">Run sweep</button>
+    </form>
+    <pre id="sweep-output"></pre>
+  </section>
+
+  <section>
     <h2>Historical results</h2>
     <table id="runs-table">
       <thead>
@@ -231,6 +243,34 @@ document.getElementById('recommend-form').addEventListener('submit', async (e) =
     `;
   } catch (err) {
     output.innerHTML = '<p class="fail">Request failed: ' + err + '</p>';
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('sweep-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = document.getElementById('sweep-button');
+  const output = document.getElementById('sweep-output');
+  const data = Object.fromEntries(new FormData(e.target).entries());
+  const budgets = data.memory_budget_mb_list.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+  button.disabled = true;
+  output.textContent = 'Running sweep — one real run per budget, this may take a while...';
+  try {
+    const res = await fetch('/sweep', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        model: data.model, device: data.device,
+        max_new_tokens: parseInt(data.max_new_tokens, 10),
+        memory_budget_mb_list: budgets,
+      }),
+    });
+    const body = await res.json();
+    output.textContent = body.report || JSON.stringify(body, null, 2);
+    await loadRuns();
+  } catch (err) {
+    output.textContent = 'Request failed: ' + err;
   } finally {
     button.disabled = false;
   }

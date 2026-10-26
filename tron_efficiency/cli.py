@@ -5,6 +5,7 @@
     python -m tron_efficiency.cli run --policy baseline
     python -m tron_efficiency.cli run --policy offload --memory-budget-mb 128
     python -m tron_efficiency.cli compare --memory-budget-mb 128
+    python -m tron_efficiency.cli sweep --memory-budget-mb-list 50,100,200,400
     python -m tron_efficiency.cli report <run_id> [<run_id> ...]
     python -m tron_efficiency.cli serve
 """
@@ -104,6 +105,21 @@ def cmd_compare(args) -> int:
     return 0
 
 
+def cmd_sweep(args) -> int:
+    from tron_efficiency.benchmarks.engine import run_budget_sweep
+    from tron_efficiency.results.report import generate_sweep_report
+
+    config = _build_config(args)
+    budgets_bytes = [mb * 1024 * 1024 for mb in args.memory_budget_mb_list]
+    results = run_budget_sweep(config, budgets_bytes, include_baseline=not args.no_baseline)
+    for r in results:
+        save_run(r)
+        _print_outcome(r)
+    print()
+    print(generate_sweep_report(results))
+    return 0
+
+
 def cmd_report(args) -> int:
     all_runs = {r.run_id: r for r in list_runs()}
     if args.run_ids:
@@ -175,6 +191,24 @@ def build_parser() -> argparse.ArgumentParser:
     compare_p.add_argument("--memory-budget-mb", type=int, default=100)
     compare_p.add_argument("--hourly-rate", type=float, default=None)
     compare_p.set_defaults(func=cmd_compare)
+
+    def _parse_mb_list(value: str) -> list[int]:
+        return [int(x.strip()) for x in value.split(",") if x.strip()]
+
+    sweep_p = sub.add_parser(
+        "sweep", help="run the same workload across multiple memory budgets (a real tradeoff curve)"
+    )
+    add_workload_args(sweep_p)
+    sweep_p.add_argument(
+        "--memory-budget-mb-list",
+        type=_parse_mb_list,
+        required=True,
+        help="comma-separated budgets in MB, e.g. 50,100,200,400",
+    )
+    sweep_p.add_argument(
+        "--no-baseline", action="store_true", help="skip the unconstrained baseline run"
+    )
+    sweep_p.set_defaults(func=cmd_sweep)
 
     report_p = sub.add_parser("report", help="render a report from saved runs")
     report_p.add_argument("run_ids", nargs="*")

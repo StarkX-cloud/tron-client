@@ -21,9 +21,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from tron_efficiency.advisor.recommend import recommend as _recommend
+from tron_efficiency.benchmarks.engine import run_budget_sweep as _run_budget_sweep
 from tron_efficiency.hardware.detect import detect_hardware
 from tron_efficiency.memory.policies import BaselinePolicy, OffloadPolicy
-from tron_efficiency.results.report import generate_report
+from tron_efficiency.results.report import generate_report, generate_sweep_report
 from tron_efficiency.results.schema import BenchmarkResult
 from tron_efficiency.results.writer import list_runs, load_run, save_run, write_csv_rows
 from tron_efficiency.workloads.config import WorkloadConfig
@@ -78,6 +79,37 @@ def create_run(req: RunRequest):
     result = BenchmarkResult.build(hardware, config, policy.describe(), outcome)
     save_run(result)
     return result.to_dict()
+
+
+class SweepRequest(BaseModel):
+    model: str = "EleutherAI/pythia-70m"
+    prompt: str = WorkloadConfig().prompt
+    max_new_tokens: int = 32
+    batch_size: int = 1
+    device: str = "cpu"
+    dtype: str | None = None
+    memory_budget_mb_list: list[int]
+    include_baseline: bool = True
+
+
+@app.post("/sweep")
+def create_sweep(req: SweepRequest):
+    config = WorkloadConfig(
+        model_name=req.model,
+        prompt=req.prompt,
+        max_new_tokens=req.max_new_tokens,
+        batch_size=req.batch_size,
+        device=req.device,
+        dtype=req.dtype,
+    )
+    budgets_bytes = [mb * 1024 * 1024 for mb in req.memory_budget_mb_list]
+    results = _run_budget_sweep(config, budgets_bytes, include_baseline=req.include_baseline)
+    for r in results:
+        save_run(r)
+    return {
+        "results": [r.to_dict() for r in results],
+        "report": generate_sweep_report(results),
+    }
 
 
 @app.get("/runs")

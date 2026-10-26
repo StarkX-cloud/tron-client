@@ -119,3 +119,72 @@ def generate_report(
         lines.append("")
 
     return "\n".join(lines) + "\n"
+
+
+def _sweep_row_label(r: BenchmarkResult) -> str:
+    """generate_report labels columns by policy name alone ("offload"),
+    which collides across a budget sweep where every row is "offload" at a
+    different budget — this labels each row distinctly instead."""
+    name = r.policy.get("name", r.outcome.policy_name)
+    budget = r.policy.get("memory_budget_bytes")
+    if budget is None:
+        return name
+    return f"{name} @ {budget / (1024 * 1024):.0f}MB"
+
+
+def generate_sweep_report(results: list[BenchmarkResult]) -> str:
+    """Report a budget sweep (see benchmarks/engine.py's run_budget_sweep)
+    as a real tradeoff curve: one row per budget, sorted from largest to
+    smallest, so the trend (if any) reads top to bottom. Every number here
+    is from an independent real run at that specific budget — nothing is
+    interpolated or estimated between points.
+    """
+    if not results:
+        return "# Budget sweep report\n\nNo results to report.\n"
+
+    lines = ["# Budget sweep report", ""]
+    lines.append(f"{len(results)} run(s), one per budget (plus baseline if included).")
+    lines.append("")
+
+    ordered = sorted(
+        results,
+        key=lambda r: (
+            r.policy.get("memory_budget_bytes") is None,  # baseline (None) sorts first
+            -(r.policy.get("memory_budget_bytes") or 0),
+        ),
+    )
+
+    lines.append("## Runs")
+    for r in ordered:
+        status = "OK" if r.outcome.success else f"FAILED ({r.outcome.error})"
+        lines.append(f"- `{_sweep_row_label(r)}`: {status}")
+        for w in r.warnings:
+            lines.append(f"  - warning: {w}")
+    lines.append("")
+
+    successful = [r for r in ordered if r.outcome.success]
+    if not successful:
+        lines.append("**No successful runs in this sweep — no trend to report.**")
+        return "\n".join(lines) + "\n"
+
+    lines.append("## Tradeoff curve")
+    lines.append("")
+    headers = [label for _, label, _ in _METRICS]
+    lines.append("| Budget | " + " | ".join(headers) + " |")
+    lines.append("|---" * (len(headers) + 1) + "|")
+    for r in successful:
+        cells = []
+        for field_name, _, _ in _METRICS:
+            value = getattr(r.outcome, field_name)
+            cells.append("-" if value is None else f"{value:,.4g}")
+        lines.append(f"| {_sweep_row_label(r)} | " + " | ".join(cells) + " |")
+    lines.append("")
+
+    all_warnings = [w for r in results for w in r.warnings]
+    if all_warnings:
+        lines.append("## Warnings carried from individual runs")
+        for w in sorted(set(all_warnings)):
+            lines.append(f"- {w}")
+        lines.append("")
+
+    return "\n".join(lines) + "\n"

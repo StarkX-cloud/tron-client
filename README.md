@@ -136,6 +136,7 @@ python -m tron_efficiency.cli recommend --model EleutherAI/pythia-70m
 python -m tron_efficiency.cli run --policy baseline     # plain load + generate
 python -m tron_efficiency.cli run --policy offload --memory-budget-mb 100
 python -m tron_efficiency.cli compare --memory-budget-mb 100 --hourly-rate 0.50
+python -m tron_efficiency.cli sweep --memory-budget-mb-list 50,100,200,400
 python -m tron_efficiency.cli serve                      # API + dashboard on :9100 (TRON_EFFICIENCY_PORT)
 ```
 
@@ -299,10 +300,19 @@ same convention as `tron/training/benchmark_lora.py`'s ~20-minute real run).
   was actually measured, instead of leaving the raw underlying error as
   the only information. A pre-flight numeric check would have meant
   guessing a number this project doesn't have evidence for.
+- **Addressed for the budget dimension:** `cli sweep --memory-budget-mb-list
+  100,150,250` (API: `POST /sweep`) runs the same workload across several
+  budgets in one pass — a real tradeoff curve, not two isolated points.
+  Real example in
+  [writeup/compute-efficiency-budget-sweep-example.md](writeup/compute-efficiency-budget-sweep-example.md):
+  `pythia-70m` on CPU holds steady at ~33 tok/s from 150-250MB, then hits
+  a real cliff at 100MB — throughput collapses 8.6x (32.7→3.8 tok/s) for
+  only an 8.6% memory saving. Sweeping *model sizes* still isn't
+  automated (each model is its own multi-GB download with its own real
+  cost — a deliberate choice to leave that explicit, not an oversight).
 - Single model family tested per environment (`pythia-70m` on CPU,
-  `pythia-410m` on the one GPU run); no sweep across model sizes or memory
-  budgets yet (`benchmarks/engine.py` supports it — `cli.py` just doesn't
-  expose a sweep flag yet).
+  `pythia-410m`/`pythia-1.4b` on the GPU runs); still only a handful of
+  models total.
 - Peak CPU memory is sampled via a polling thread (50ms interval), not a
   true OS-level peak — Windows has no `resource.getrusage` equivalent.
 - On this CPU-only dev machine specifically, the "critical experiment"

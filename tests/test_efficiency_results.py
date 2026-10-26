@@ -9,7 +9,7 @@ import json
 import os
 
 from tron_efficiency.hardware.detect import HardwareInfo
-from tron_efficiency.results.report import generate_report
+from tron_efficiency.results.report import generate_report, generate_sweep_report
 from tron_efficiency.results.schema import BenchmarkResult
 from tron_efficiency.results.writer import list_runs, save_run, write_csv, write_json
 from tron_efficiency.workloads.config import WorkloadConfig
@@ -29,7 +29,7 @@ def _fake_hardware(cuda=False):
     )
 
 
-def _fake_result(policy_name="baseline", success=True, text="hello world", **overrides):
+def _fake_result(policy_name="baseline", success=True, text="hello world", policy=None, **overrides):
     config = WorkloadConfig(model_name="fake/model", max_new_tokens=8)
     defaults = dict(
         load_time_seconds=1.0,
@@ -47,7 +47,7 @@ def _fake_result(policy_name="baseline", success=True, text="hello world", **ove
         error=None if success else "boom",
         **defaults,
     )
-    return BenchmarkResult.build(_fake_hardware(), config, {"name": policy_name}, outcome)
+    return BenchmarkResult.build(_fake_hardware(), config, policy or {"name": policy_name}, outcome)
 
 
 def test_result_to_dict_and_from_dict_round_trip():
@@ -113,3 +113,57 @@ def test_report_cost_estimate_is_labeled_as_estimate():
     report = generate_report(results, hourly_rate_usd=1.0)
     assert "estimate" in report.lower()
     assert "not an actual customer saving" in report
+
+
+def _fake_sweep_result(budget_mb, end_to_end_latency_seconds, peak_cpu_memory_bytes):
+    budget_bytes = budget_mb * 1024 * 1024
+    return _fake_result(
+        "offload",
+        policy={"name": "offload", "memory_budget_bytes": budget_bytes},
+        end_to_end_latency_seconds=end_to_end_latency_seconds,
+        peak_cpu_memory_bytes=peak_cpu_memory_bytes,
+    )
+
+
+def test_sweep_report_labels_rows_by_budget_not_just_policy_name():
+    results = [
+        _fake_result("baseline"),
+        _fake_sweep_result(100, 1.0, 500 * 1024 * 1024),
+        _fake_sweep_result(50, 3.0, 300 * 1024 * 1024),
+    ]
+    report = generate_sweep_report(results)
+    assert "baseline" in report
+    assert "offload @ 100MB" in report
+    assert "offload @ 50MB" in report
+
+
+def test_sweep_report_orders_largest_budget_first():
+    results = [
+        _fake_sweep_result(50, 3.0, 300 * 1024 * 1024),
+        _fake_sweep_result(200, 0.5, 700 * 1024 * 1024),
+        _fake_sweep_result(100, 1.0, 500 * 1024 * 1024),
+    ]
+    report = generate_sweep_report(results)
+    pos_200 = report.index("offload @ 200MB")
+    pos_100 = report.index("offload @ 100MB")
+    pos_50 = report.index("offload @ 50MB")
+    assert pos_200 < pos_100 < pos_50
+
+
+def test_sweep_report_baseline_sorts_before_budgets():
+    results = [
+        _fake_sweep_result(100, 1.0, 500 * 1024 * 1024),
+        _fake_result("baseline"),
+    ]
+    report = generate_sweep_report(results)
+    assert report.index("baseline") < report.index("offload @ 100MB")
+
+
+def test_sweep_report_with_no_results():
+    assert "No results to report" in generate_sweep_report([])
+
+
+def test_sweep_report_all_failed_reports_no_trend():
+    results = [_fake_result("baseline", success=False)]
+    report = generate_sweep_report(results)
+    assert "No successful runs in this sweep" in report
