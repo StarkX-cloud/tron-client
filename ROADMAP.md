@@ -756,3 +756,23 @@ technical design behind each phase.
   Tests: 3 new in `tests/test_efficiency_benchmarks_engine.py`, 6 new in
   `tests/test_efficiency_results.py`, 1 new in `tests/test_efficiency_api.py`.
   270 passing (was 260).
+- [x] **Feed the dtype sweep's finding back into the advisor** (same day).
+  Before this, `advisor/recommend.py`'s `CPU_DTYPE_CANDIDATES` was just
+  `["fp32", "fp16"]` — the CPU branch never recommended quantization at
+  all, and separately carried no awareness of the dtype-sweep result above
+  (that int8 measured *slower* than fp32 on CPU, not faster). Fixed both:
+  `CPU_DTYPE_CANDIDATES` now includes `int8`/`int4` as fallback options
+  when `fp32`/`fp16` don't fit in available RAM, and whenever a CPU
+  recommendation lands on a quantized dtype it carries
+  `CPU_QUANTIZED_DTYPE_WARNING`, citing the exact measured number (int8
+  2.6x slower, 6.03 vs 15.45 tok/s) — so quantization is only ever reached
+  for *memory*, never silently implied to also be faster, and confidence
+  drops to `low` for that case to reflect it's a real tradeoff, not a
+  clean win. This is the same "outcomes feed back into the decision
+  layer" pattern the original TRON-II work used (see
+  [[tron-gap-bridging]] in project memory) — a layer's job isn't done
+  once it ships, it should keep learning from what gets measured under it.
+  Tests: 3 new in `tests/test_efficiency_advisor.py` (CPU falls back to
+  quantized when fp32/fp16 don't fit, the warning is attached with the
+  real measured number, non-quantized recommendations carry no such
+  warning). 273 passing (was 270).

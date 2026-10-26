@@ -166,6 +166,18 @@ Far beyond it (bigger GPUs, bigger models): still only medium-to-low,
 because confidence shouldn't rise just because a number is larger — it's
 still extrapolation past the one thing that was actually measured.
 
+**The dtype sweep's finding feeds back into the advisor.** On CPU,
+`recommend()` tries `fp32`/`fp16` first and only reaches for `int8`/`int4`
+when neither fits — not because quantization is assumed faster (it
+measurably isn't; see
+[writeup/compute-efficiency-dtype-sweep-example.md](writeup/compute-efficiency-dtype-sweep-example.md)).
+Whenever a CPU recommendation does land on a quantized dtype, it carries
+an explicit warning citing the real measured number (int8 was 2.6x
+*slower* than fp32 on this project's CPU test), so a recommendation never
+silently implies a speed win that was specifically measured not to hold.
+Confidence drops to `low` for that case, reflecting that it's a real
+memory/speed tradeoff being made, not a clean win.
+
 **Quantized loading is real, not advisory.** `int8`/`int4` recommendations
 are backed by actual `bitsandbytes` quantization (`BitsAndBytesConfig`,
 the same mechanism anyone using `transformers` has access to) — both

@@ -39,7 +39,26 @@ CONFIRMED_WORKING_GPU_BUDGET_BYTES = 1200 * 1024 * 1024
 # including it would make the "does it fit without offload" check overly
 # pessimistic for the case that actually matters.
 GPU_DTYPE_CANDIDATES = ["fp16", "int8", "int4"]
-CPU_DTYPE_CANDIDATES = ["fp32", "fp16"]
+
+# fp32/fp16 tried first on CPU (whichever fits), int8/int4 only as a last
+# resort if neither fits -- NOT because they're assumed faster. The real
+# dtype sweep (writeup/compute-efficiency-dtype-sweep-example.md,
+# pythia-70m on CPU) measured int8 as 2.6x *slower* than fp32 on this
+# hardware, not faster, despite using less memory. Quantization is only
+# reached here when it's needed to fit at all, and CPU_QUANTIZED_DTYPE_WARNING
+# below is attached whenever that happens, so a recommendation never
+# silently implies a speed win that was specifically measured not to hold.
+CPU_DTYPE_CANDIDATES = ["fp32", "fp16", "int8", "int4"]
+
+CPU_QUANTIZED_DTYPE_WARNING = (
+    "this recommends a quantized dtype on CPU purely for memory -- the real "
+    "dtype sweep (writeup/compute-efficiency-dtype-sweep-example.md, "
+    "pythia-70m on this project's dev machine) measured int8 as 2.6x SLOWER "
+    "than fp32 on CPU (6.03 vs 15.45 tok/s), not faster, despite using less "
+    "memory. Don't assume this dtype will also be faster for your model -- "
+    "that hasn't been measured here and the one data point this project has "
+    "says the opposite on CPU."
+)
 
 
 @dataclass
@@ -245,6 +264,15 @@ def _recommend_cpu(model_name, size, hardware, rationale, warnings) -> Recommend
                 f"{dtype} weights ({weight_bytes:,} bytes) fit comfortably in "
                 f"{hardware.cpu_total_memory_bytes:,} bytes of system RAM."
             )
+            dtype_warnings = list(warnings)
+            # int8/int4 only get reached here when fp32/fp16 didn't fit --
+            # reaching for memory savings, not speed. Say so explicitly,
+            # citing the real measurement, so this never reads as "smaller
+            # dtype = also faster" the way it would for the GPU branch.
+            confidence = "medium"
+            if dtype in ("int8", "int4"):
+                dtype_warnings = dtype_warnings + [CPU_QUANTIZED_DTYPE_WARNING]
+                confidence = "low"
             return Recommendation(
                 model_name=model_name,
                 estimated_param_count=size.param_count,
@@ -253,9 +281,9 @@ def _recommend_cpu(model_name, size, hardware, rationale, warnings) -> Recommend
                 dtype=dtype,
                 policy="baseline",
                 memory_budget_bytes=None,
-                confidence="medium",
+                confidence=confidence,
                 rationale=rationale,
-                warnings=warnings,
+                warnings=dtype_warnings,
             )
 
     rationale.append("model too large for comfortable in-RAM baseline -- recommending CPU disk offload")

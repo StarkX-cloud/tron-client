@@ -175,6 +175,43 @@ def test_recommend_never_pairs_int4_with_offload():
     assert rec.dtype == "int8"
 
 
+def test_recommend_cpu_falls_back_to_quantized_when_fp32_fp16_dont_fit():
+    # 1B params on 2GB RAM: fp32 (6GB w/ margin) and fp16 (3GB w/ margin)
+    # both fail the 1.5x-margin check; int8 (1.5GB w/ margin) just fits.
+    rec = recommend(
+        "fake/model",
+        hardware=_fake_cpu_hardware(ram_gb=2),
+        size_estimate=_fake_size_estimate(1_000_000_000),
+    )
+    assert rec.device == "cpu"
+    assert rec.policy == "baseline"
+    assert rec.dtype == "int8"
+
+
+def test_recommend_cpu_quantized_dtype_carries_measured_speed_warning():
+    # Real finding from the dtype sweep: quantization saves memory on CPU
+    # but was measured SLOWER, not faster -- this must never be silently
+    # implied by a recommendation.
+    rec = recommend(
+        "fake/model",
+        hardware=_fake_cpu_hardware(ram_gb=2),
+        size_estimate=_fake_size_estimate(1_000_000_000),
+    )
+    assert rec.dtype in ("int8", "int4")
+    assert any("SLOWER" in w and "dtype-sweep" in w for w in rec.warnings)
+    assert rec.confidence == "low"
+
+
+def test_recommend_cpu_non_quantized_dtype_has_no_speed_warning():
+    rec = recommend(
+        "fake/small-model",
+        hardware=_fake_cpu_hardware(ram_gb=16),
+        size_estimate=_fake_size_estimate(70_000_000),
+    )
+    assert rec.dtype == "fp32"
+    assert not any("dtype-sweep" in w for w in rec.warnings)
+
+
 def test_recommend_handles_unestimatable_model_gracefully():
     unknown = ModelSizeEstimate(
         model_name="fake/weird-model", param_count=0, param_count_is_estimate=True,
