@@ -75,7 +75,10 @@ def _loading_kwargs_for_dtype(dtype: str | None, allow_cpu_offload: bool = False
         import torch
 
         torch_dtype = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}[dtype]
-        return {"torch_dtype": torch_dtype}
+        # transformers renamed from_pretrained's torch_dtype= kwarg to
+        # dtype= (torch_dtype still works but warns as deprecated as of
+        # the version this was developed against, 5.16.1).
+        return {"dtype": torch_dtype}
     if dtype in ("int8", "int4"):
         from transformers import BitsAndBytesConfig
 

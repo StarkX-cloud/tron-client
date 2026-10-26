@@ -71,12 +71,16 @@ def test_dtype_none_preserves_old_no_kwargs_behavior():
     assert _loading_kwargs_for_dtype(None) == {}
 
 
-def test_dtype_fp_variants_map_to_torch_dtype():
+def test_dtype_fp_variants_map_to_dtype_kwarg():
+    # transformers renamed from_pretrained's torch_dtype= to dtype= (the
+    # old name still works but is deprecated as of 5.16.1, the version
+    # this was developed against) -- using the current name, not the
+    # deprecated one.
     import torch
 
-    assert _loading_kwargs_for_dtype("fp32") == {"torch_dtype": torch.float32}
-    assert _loading_kwargs_for_dtype("fp16") == {"torch_dtype": torch.float16}
-    assert _loading_kwargs_for_dtype("bf16") == {"torch_dtype": torch.bfloat16}
+    assert _loading_kwargs_for_dtype("fp32") == {"dtype": torch.float32}
+    assert _loading_kwargs_for_dtype("fp16") == {"dtype": torch.float16}
+    assert _loading_kwargs_for_dtype("bf16") == {"dtype": torch.bfloat16}
 
 
 def test_dtype_int8_produces_quantization_config():

@@ -719,3 +719,40 @@ technical design behind each phase.
   `tests/test_efficiency_results.py` (sweep report row labeling/ordering/
   edge cases), 2 new in `tests/test_efficiency_api.py` (`/sweep`
   endpoint, with and without baseline). 260 passing (was 248).
+- [x] **Dtype sweep — measures quantization's real cost/benefit, which
+  the "real quantized loading" entry above confirmed works but never
+  benchmarked** (same day). `benchmarks/engine.py`'s `run_dtype_sweep`
+  runs `BaselinePolicy` once per dtype; deliberately does *not* reuse
+  `run_suite`'s output-correctness check (divergent text across dtypes is
+  expected — quantization is lossy by design — not a bug the way policy
+  divergence would be). `results/report.py`'s `generate_dtype_sweep_report`
+  labels rows by dtype and reports the generated text per dtype as a
+  factual note, never framed as a warning. Wired into `cli.py`
+  (`dtype-sweep --dtypes fp32,fp16,int8,int4`), `api/app.py`
+  (`POST /dtype-sweep`), and a dashboard form.
+  **Real result** (`pythia-70m`, CPU — full numbers in
+  `writeup/compute-efficiency-dtype-sweep-example.md`): peak memory drops
+  monotonically and genuinely with precision (804MB fp32 → 589MB int4, a
+  real 27% reduction) — the win quantization is supposed to deliver, and
+  it's real here. **But throughput does not drop monotonically**: int8 is
+  **2.6x slower than fp32** (6.03 vs. 15.45 tok/s), worse than both fp32
+  and fp16, with int4 landing in between. Hypothesis, not yet confirmed:
+  bitsandbytes' CPU kernels aren't necessarily as optimized as native
+  PyTorch fp32/fp16 ops — the GPU story (where tensor cores typically make
+  int8 faster, not just smaller) may well be different, but this project
+  hasn't measured that yet. "Quantize for a speed win" turned out to be
+  conditional on hardware, not universal — worth knowing before claiming
+  it, which is exactly why this got measured instead of assumed.
+  Also fixed in passing: `_loading_kwargs_for_dtype` used `torch_dtype=`,
+  which `transformers` (5.16.1, the version this was developed against)
+  flags as deprecated in favor of `dtype=` — switched to the current
+  kwarg, confirmed no deprecation warning fires anymore.
+  **Honest gaps:** one small model, one CPU machine, one run per dtype
+  (no repeated trials); no automated output-quality metric (perplexity,
+  task accuracy) to quantify how much int4's visibly-more-different
+  output actually degrades quality beyond eyeballing it; the GPU-side
+  version of this sweep (does int8 actually deliver its expected speed
+  win there) is a natural next step, not yet run.
+  Tests: 3 new in `tests/test_efficiency_benchmarks_engine.py`, 6 new in
+  `tests/test_efficiency_results.py`, 1 new in `tests/test_efficiency_api.py`.
+  270 passing (was 260).

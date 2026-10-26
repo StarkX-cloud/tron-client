@@ -20,7 +20,7 @@ class WorkloadConfig:
     batch_size: int = 1
     device: str = "cpu"  # "cpu" or "cuda" — chosen explicitly, never guessed
     seed: int = 0
-    # None = don't pass torch_dtype at all (the old, pre-dtype-control
+    # None = don't pass a dtype/torch_dtype argument at all (the old, pre-dtype-control
     # behavior: whatever the checkpoint happens to be stored as). One of
     # "fp32"/"fp16"/"bf16"/"int8"/"int4" explicitly requests that precision
     # -- see memory/policies.py for how each is actually loaded. Added

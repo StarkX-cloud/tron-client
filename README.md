@@ -310,6 +310,20 @@ same convention as `tron/training/benchmark_lora.py`'s ~20-minute real run).
   only an 8.6% memory saving. Sweeping *model sizes* still isn't
   automated (each model is its own multi-GB download with its own real
   cost — a deliberate choice to leave that explicit, not an oversight).
+- **Also addressed for the quantization dimension:** `cli dtype-sweep
+  --dtypes fp32,fp16,int8,int4` (API: `POST /dtype-sweep`) measures what
+  quantization actually costs/saves, since it had only been confirmed to
+  load and generate correctly before this, never benchmarked. Real result
+  in
+  [writeup/compute-efficiency-dtype-sweep-example.md](writeup/compute-efficiency-dtype-sweep-example.md):
+  memory drops monotonically and genuinely with precision (804MB fp32 →
+  589MB int4, a real 27% reduction), but **throughput does not** —
+  int8 is 2.6x *slower* than fp32 on this CPU machine (6.03 vs. 15.45
+  tok/s), likely because bitsandbytes' CPU kernels aren't as optimized as
+  native PyTorch ops (a GPU would likely tell a different, faster story —
+  not yet measured). "Quantize for a speed win" turned out to be the GPU
+  story, not a universal one; measuring this before claiming it avoided
+  shipping a false claim.
 - Single model family tested per environment (`pythia-70m` on CPU,
   `pythia-410m`/`pythia-1.4b` on the GPU runs); still only a handful of
   models total.

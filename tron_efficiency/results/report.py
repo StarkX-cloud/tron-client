@@ -188,3 +188,73 @@ def generate_sweep_report(results: list[BenchmarkResult]) -> str:
         lines.append("")
 
     return "\n".join(lines) + "\n"
+
+
+def generate_dtype_sweep_report(results: list[BenchmarkResult]) -> str:
+    """Report a dtype sweep (see benchmarks/engine.py's run_dtype_sweep) —
+    the real cost/benefit of quantization, measured, not assumed. Unlike
+    generate_sweep_report's budget curve, divergent generated_text across
+    rows here is expected (quantization is lossy by design) and reported
+    as a plain fact, never as a "something's wrong" warning.
+    """
+    if not results:
+        return "# Dtype sweep report\n\nNo results to report.\n"
+
+    lines = ["# Dtype sweep report", ""]
+    lines.append(f"{len(results)} run(s), one per dtype.")
+    lines.append("")
+
+    lines.append("## Runs")
+    for r in results:
+        status = "OK" if r.outcome.success else f"FAILED ({r.outcome.error})"
+        label = r.config.dtype or "checkpoint-default"
+        lines.append(f"- `{label}`: {status}")
+        for w in r.warnings:
+            lines.append(f"  - warning: {w}")
+    lines.append("")
+
+    successful = [r for r in results if r.outcome.success]
+    if not successful:
+        lines.append("**No successful runs in this sweep — no trend to report.**")
+        return "\n".join(lines) + "\n"
+
+    lines.append("## Dtype comparison")
+    lines.append("")
+    headers = [label for _, label, _ in _METRICS]
+    lines.append("| Dtype | " + " | ".join(headers) + " |")
+    lines.append("|---" * (len(headers) + 1) + "|")
+    for r in successful:
+        cells = []
+        for field_name, _, _ in _METRICS:
+            value = getattr(r.outcome, field_name)
+            cells.append("-" if value is None else f"{value:,.4g}")
+        label = r.config.dtype or "checkpoint-default"
+        lines.append(f"| {label} | " + " | ".join(cells) + " |")
+    lines.append("")
+
+    texts = {
+        (r.config.dtype or "checkpoint-default"): r.outcome.generated_text for r in successful
+    }
+    unique_texts = set(texts.values())
+    lines.append("## Output text")
+    lines.append(
+        "Quantization is lossy by design — different dtypes producing different "
+        "text is expected, not reported as a correctness problem the way it would "
+        "be for OffloadPolicy (which should produce identical output to baseline)."
+    )
+    if len(unique_texts) == 1:
+        lines.append("All dtypes in this sweep produced identical output.")
+    else:
+        lines.append(f"{len(unique_texts)} distinct output(s) across {len(texts)} dtype(s):")
+        for dtype_label, text in texts.items():
+            lines.append(f"- `{dtype_label}`: {text!r}")
+    lines.append("")
+
+    all_warnings = [w for r in results for w in r.warnings]
+    if all_warnings:
+        lines.append("## Warnings carried from individual runs")
+        for w in sorted(set(all_warnings)):
+            lines.append(f"- {w}")
+        lines.append("")
+
+    return "\n".join(lines) + "\n"

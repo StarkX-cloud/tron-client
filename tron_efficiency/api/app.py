@@ -22,9 +22,14 @@ from pydantic import BaseModel
 
 from tron_efficiency.advisor.recommend import recommend as _recommend
 from tron_efficiency.benchmarks.engine import run_budget_sweep as _run_budget_sweep
+from tron_efficiency.benchmarks.engine import run_dtype_sweep as _run_dtype_sweep
 from tron_efficiency.hardware.detect import detect_hardware
 from tron_efficiency.memory.policies import BaselinePolicy, OffloadPolicy
-from tron_efficiency.results.report import generate_report, generate_sweep_report
+from tron_efficiency.results.report import (
+    generate_dtype_sweep_report,
+    generate_report,
+    generate_sweep_report,
+)
 from tron_efficiency.results.schema import BenchmarkResult
 from tron_efficiency.results.writer import list_runs, load_run, save_run, write_csv_rows
 from tron_efficiency.workloads.config import WorkloadConfig
@@ -109,6 +114,33 @@ def create_sweep(req: SweepRequest):
     return {
         "results": [r.to_dict() for r in results],
         "report": generate_sweep_report(results),
+    }
+
+
+class DtypeSweepRequest(BaseModel):
+    model: str = "EleutherAI/pythia-70m"
+    prompt: str = WorkloadConfig().prompt
+    max_new_tokens: int = 32
+    batch_size: int = 1
+    device: str = "cpu"
+    dtypes: list[str | None] = ["fp32", "fp16", "int8", "int4"]
+
+
+@app.post("/dtype-sweep")
+def create_dtype_sweep(req: DtypeSweepRequest):
+    config = WorkloadConfig(
+        model_name=req.model,
+        prompt=req.prompt,
+        max_new_tokens=req.max_new_tokens,
+        batch_size=req.batch_size,
+        device=req.device,
+    )
+    results = _run_dtype_sweep(config, req.dtypes)
+    for r in results:
+        save_run(r)
+    return {
+        "results": [r.to_dict() for r in results],
+        "report": generate_dtype_sweep_report(results),
     }
 
 

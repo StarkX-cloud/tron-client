@@ -9,7 +9,11 @@ import json
 import os
 
 from tron_efficiency.hardware.detect import HardwareInfo
-from tron_efficiency.results.report import generate_report, generate_sweep_report
+from tron_efficiency.results.report import (
+    generate_dtype_sweep_report,
+    generate_report,
+    generate_sweep_report,
+)
 from tron_efficiency.results.schema import BenchmarkResult
 from tron_efficiency.results.writer import list_runs, save_run, write_csv, write_json
 from tron_efficiency.workloads.config import WorkloadConfig
@@ -29,8 +33,8 @@ def _fake_hardware(cuda=False):
     )
 
 
-def _fake_result(policy_name="baseline", success=True, text="hello world", policy=None, **overrides):
-    config = WorkloadConfig(model_name="fake/model", max_new_tokens=8)
+def _fake_result(policy_name="baseline", success=True, text="hello world", policy=None, dtype=None, **overrides):
+    config = WorkloadConfig(model_name="fake/model", max_new_tokens=8, dtype=dtype)
     defaults = dict(
         load_time_seconds=1.0,
         time_to_first_token_seconds=0.1,
@@ -166,4 +170,50 @@ def test_sweep_report_with_no_results():
 def test_sweep_report_all_failed_reports_no_trend():
     results = [_fake_result("baseline", success=False)]
     report = generate_sweep_report(results)
+    assert "No successful runs in this sweep" in report
+
+
+def test_dtype_sweep_report_labels_rows_by_dtype():
+    results = [
+        _fake_result("baseline", dtype="fp32", text="fp32 output"),
+        _fake_result("baseline", dtype="int8", text="int8 output"),
+    ]
+    report = generate_dtype_sweep_report(results)
+    assert "fp32" in report
+    assert "int8" in report
+
+
+def test_dtype_sweep_report_notes_divergent_output_without_warning_framing():
+    results = [
+        _fake_result("baseline", dtype="fp32", text="output A"),
+        _fake_result("baseline", dtype="int4", text="output B (garbled)"),
+    ]
+    report = generate_dtype_sweep_report(results)
+    assert "lossy by design" in report
+    assert "2 distinct output(s)" in report
+    assert "output A" in report and "output B (garbled)" in report
+
+
+def test_dtype_sweep_report_notes_identical_output():
+    results = [
+        _fake_result("baseline", dtype="fp32", text="same text"),
+        _fake_result("baseline", dtype="fp16", text="same text"),
+    ]
+    report = generate_dtype_sweep_report(results)
+    assert "identical output" in report
+
+
+def test_dtype_sweep_report_checkpoint_default_label():
+    results = [_fake_result("baseline", dtype=None)]
+    report = generate_dtype_sweep_report(results)
+    assert "checkpoint-default" in report
+
+
+def test_dtype_sweep_report_with_no_results():
+    assert "No results to report" in generate_dtype_sweep_report([])
+
+
+def test_dtype_sweep_report_all_failed_reports_no_trend():
+    results = [_fake_result("baseline", dtype="fp32", success=False)]
+    report = generate_dtype_sweep_report(results)
     assert "No successful runs in this sweep" in report

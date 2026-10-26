@@ -6,6 +6,7 @@
     python -m tron_efficiency.cli run --policy offload --memory-budget-mb 128
     python -m tron_efficiency.cli compare --memory-budget-mb 128
     python -m tron_efficiency.cli sweep --memory-budget-mb-list 50,100,200,400
+    python -m tron_efficiency.cli dtype-sweep --dtypes fp32,fp16,int8,int4
     python -m tron_efficiency.cli report <run_id> [<run_id> ...]
     python -m tron_efficiency.cli serve
 """
@@ -120,6 +121,27 @@ def cmd_sweep(args) -> int:
     return 0
 
 
+def cmd_dtype_sweep(args) -> int:
+    from tron_efficiency.benchmarks.engine import run_dtype_sweep
+    from tron_efficiency.results.report import generate_dtype_sweep_report
+
+    config = WorkloadConfig(
+        model_name=args.model,
+        prompt=args.prompt,
+        max_new_tokens=args.max_new_tokens,
+        batch_size=args.batch_size,
+        device=args.device,
+    )
+    dtypes = [None if d == "checkpoint-default" else d for d in args.dtypes]
+    results = run_dtype_sweep(config, dtypes)
+    for r in results:
+        save_run(r)
+        _print_outcome(r)
+    print()
+    print(generate_dtype_sweep_report(results))
+    return 0
+
+
 def cmd_report(args) -> int:
     all_runs = {r.run_id: r for r in list_runs()}
     if args.run_ids:
@@ -209,6 +231,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-baseline", action="store_true", help="skip the unconstrained baseline run"
     )
     sweep_p.set_defaults(func=cmd_sweep)
+
+    def _parse_dtype_list(value: str) -> list[str]:
+        return [x.strip() for x in value.split(",") if x.strip()]
+
+    dtype_sweep_p = sub.add_parser(
+        "dtype-sweep",
+        help="run BaselinePolicy once per dtype (quantization's real cost/benefit, measured)",
+    )
+    dtype_sweep_p.add_argument("--model", default="EleutherAI/pythia-70m")
+    dtype_sweep_p.add_argument("--prompt", default=WorkloadConfig().prompt)
+    dtype_sweep_p.add_argument("--max-new-tokens", type=int, default=32)
+    dtype_sweep_p.add_argument("--batch-size", type=int, default=1)
+    dtype_sweep_p.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
+    dtype_sweep_p.add_argument(
+        "--dtypes",
+        type=_parse_dtype_list,
+        default=["checkpoint-default", "fp32", "fp16", "int8", "int4"],
+        help="comma-separated dtypes to compare, e.g. fp32,fp16,int8,int4 "
+        "('checkpoint-default' means no torch_dtype passed at all, the old behavior)",
+    )
+    dtype_sweep_p.set_defaults(func=cmd_dtype_sweep)
 
     report_p = sub.add_parser("report", help="render a report from saved runs")
     report_p.add_argument("run_ids", nargs="*")

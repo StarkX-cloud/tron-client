@@ -134,6 +134,18 @@
   </section>
 
   <section>
+    <h2>Dtype sweep (quantization's real cost/benefit)</h2>
+    <form id="dtype-sweep-form">
+      <label>Model <input name="model" value="EleutherAI/pythia-70m" /></label>
+      <label>Device <select name="device"><option value="cpu">cpu</option><option value="cuda">cuda</option></select></label>
+      <label>Max new tokens <input name="max_new_tokens" type="number" value="16" /></label>
+      <label>Dtypes (comma-separated) <input name="dtypes" value="fp32,fp16,int8,int4" /></label>
+      <button type="submit" id="dtype-sweep-button">Run dtype sweep</button>
+    </form>
+    <pre id="dtype-sweep-output"></pre>
+  </section>
+
+  <section>
     <h2>Historical results</h2>
     <table id="runs-table">
       <thead>
@@ -264,6 +276,34 @@ document.getElementById('sweep-form').addEventListener('submit', async (e) => {
         model: data.model, device: data.device,
         max_new_tokens: parseInt(data.max_new_tokens, 10),
         memory_budget_mb_list: budgets,
+      }),
+    });
+    const body = await res.json();
+    output.textContent = body.report || JSON.stringify(body, null, 2);
+    await loadRuns();
+  } catch (err) {
+    output.textContent = 'Request failed: ' + err;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('dtype-sweep-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = document.getElementById('dtype-sweep-button');
+  const output = document.getElementById('dtype-sweep-output');
+  const data = Object.fromEntries(new FormData(e.target).entries());
+  const dtypes = data.dtypes.split(',').map(s => s.trim()).filter(Boolean);
+  button.disabled = true;
+  output.textContent = 'Running dtype sweep — one real run per dtype, this may take a while...';
+  try {
+    const res = await fetch('/dtype-sweep', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        model: data.model, device: data.device,
+        max_new_tokens: parseInt(data.max_new_tokens, 10),
+        dtypes: dtypes,
       }),
     });
     const body = await res.json();

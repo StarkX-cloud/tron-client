@@ -9,6 +9,8 @@ reporting a "win" that's actually wrong output.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from tron_efficiency.hardware.detect import HardwareInfo, detect_hardware
 from tron_efficiency.memory.policies import (
     DEFAULT_GPU_ACTIVATION_HEADROOM_FRACTION,
@@ -83,6 +85,41 @@ def run_budget_sweep(
             )
         )
     return run_suite(config, policies, hardware=hardware)
+
+
+def run_dtype_sweep(
+    config: WorkloadConfig,
+    dtypes: list[str | None],
+    hardware: HardwareInfo | None = None,
+) -> list[BenchmarkResult]:
+    """Run ``BaselinePolicy`` once per dtype in ``dtypes`` (e.g.
+    ``["fp32", "fp16", "int8", "int4"]``), measuring quantization's actual
+    cost/benefit directly — the lever ``OffloadPolicy``'s budget sweep
+    doesn't touch. Real quantized loading (``memory/policies.py``'s
+    ``_loading_kwargs_for_dtype``) is what makes this a real measurement
+    rather than a guess.
+
+    Deliberately does NOT run ``_check_output_correctness`` the way
+    ``run_suite``/``run_budget_sweep`` do: quantization is lossy by
+    design, so different dtypes producing different generated text is
+    expected, not a bug to flag. A factual note is attached instead (see
+    ``results/report.py``'s dtype-sweep report), never framed as a
+    warning the way real divergence under an unconstrained-vs-offload
+    comparison is.
+    """
+    hardware = hardware or detect_hardware()
+    results: list[BenchmarkResult] = []
+    for dtype in dtypes:
+        dtype_config = replace(config, dtype=dtype)
+        outcome = run_workload(dtype_config, BaselinePolicy())
+        result = BenchmarkResult.build(
+            hardware=hardware,
+            config=dtype_config,
+            policy_description=BaselinePolicy().describe(),
+            outcome=outcome,
+        )
+        results.append(result)
+    return results
 
 
 def _check_output_correctness(results: list[BenchmarkResult]) -> None:

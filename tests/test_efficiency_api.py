@@ -144,6 +144,36 @@ def test_sweep_endpoint_without_baseline(client, monkeypatch):
     assert len(res.json()["results"]) == 2
 
 
+def test_dtype_sweep_endpoint(client, monkeypatch):
+    # dtype-sweep also calls benchmarks.engine.run_workload directly, same
+    # patching point as the budget sweep tests above.
+    import tron_efficiency.benchmarks.engine as engine_module
+
+    def fake_run_workload(config, policy):
+        return RunOutcome(
+            success=True,
+            policy_name=policy.name,
+            load_time_seconds=0.01,
+            time_to_first_token_seconds=0.001,
+            end_to_end_latency_seconds=0.02,
+            tokens_generated=config.max_new_tokens,
+            tokens_per_second=config.max_new_tokens / 0.02,
+            peak_cpu_memory_bytes=123456,
+            generated_text=f"output for {config.dtype}",
+        )
+
+    monkeypatch.setattr(engine_module, "run_workload", fake_run_workload)
+    res = client.post(
+        "/dtype-sweep",
+        json={"model": "fake/model", "dtypes": ["fp32", "fp16", "int8"]},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["results"]) == 3
+    assert "Dtype sweep report" in body["report"]
+    assert "lossy by design" in body["report"]
+
+
 def test_recommend_endpoint(client, monkeypatch):
     import tron_efficiency.api.app as app_module
     from tron_efficiency.advisor.recommend import Recommendation
