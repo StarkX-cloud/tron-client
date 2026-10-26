@@ -174,6 +174,37 @@ def test_dtype_sweep_endpoint(client, monkeypatch):
     assert "lossy by design" in body["report"]
 
 
+def test_matrix_sweep_endpoint(client, monkeypatch):
+    import tron_efficiency.benchmarks.engine as engine_module
+
+    def fake_run_workload(config, policy):
+        return RunOutcome(
+            success=True,
+            policy_name=policy.name,
+            load_time_seconds=0.01,
+            time_to_first_token_seconds=0.001,
+            end_to_end_latency_seconds=0.02,
+            tokens_generated=config.max_new_tokens,
+            tokens_per_second=config.max_new_tokens / 0.02,
+            peak_cpu_memory_bytes=123456,
+            generated_text=f"output for {config.dtype}",
+        )
+
+    monkeypatch.setattr(engine_module, "run_workload", fake_run_workload)
+    res = client.post(
+        "/matrix-sweep",
+        json={
+            "model": "fake/model",
+            "dtypes": ["fp32", "int8"],
+            "memory_budget_mb_list": [50, 100],
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["results"]) == 4  # 2 dtypes x 2 budgets
+    assert "Matrix sweep report" in body["report"]
+
+
 def test_recommend_endpoint(client, monkeypatch):
     import tron_efficiency.api.app as app_module
     from tron_efficiency.advisor.recommend import Recommendation

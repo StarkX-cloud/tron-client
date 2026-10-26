@@ -11,6 +11,7 @@ import os
 from tron_efficiency.hardware.detect import HardwareInfo
 from tron_efficiency.results.report import (
     generate_dtype_sweep_report,
+    generate_matrix_report,
     generate_report,
     generate_sweep_report,
 )
@@ -33,7 +34,7 @@ def _fake_hardware(cuda=False):
     )
 
 
-def _fake_result(policy_name="baseline", success=True, text="hello world", policy=None, dtype=None, **overrides):
+def _fake_result(policy_name="baseline", success=True, text="hello world", policy=None, dtype=None, error=None, **overrides):
     config = WorkloadConfig(model_name="fake/model", max_new_tokens=8, dtype=dtype)
     defaults = dict(
         load_time_seconds=1.0,
@@ -48,7 +49,7 @@ def _fake_result(policy_name="baseline", success=True, text="hello world", polic
         success=success,
         policy_name=policy_name,
         generated_text=text if success else None,
-        error=None if success else "boom",
+        error=error if error is not None else (None if success else "boom"),
         **defaults,
     )
     return BenchmarkResult.build(_fake_hardware(), config, policy or {"name": policy_name}, outcome)
@@ -217,3 +218,42 @@ def test_dtype_sweep_report_all_failed_reports_no_trend():
     results = [_fake_result("baseline", dtype="fp32", success=False)]
     report = generate_dtype_sweep_report(results)
     assert "No successful runs in this sweep" in report
+
+
+def _fake_matrix_result(dtype, budget_mb, success=True, tok_per_s=10.0, error=None):
+    budget_bytes = budget_mb * 1024 * 1024
+    return _fake_result(
+        "offload",
+        policy={"name": "offload", "memory_budget_bytes": budget_bytes},
+        dtype=dtype,
+        success=success,
+        error=error,
+        tokens_per_second=tok_per_s,
+    )
+
+
+def test_matrix_report_shows_grid_of_dtype_x_budget():
+    results = [
+        _fake_matrix_result("fp32", 100, tok_per_s=15.45),
+        _fake_matrix_result("int8", 100, tok_per_s=6.03),
+        _fake_matrix_result("fp32", 50, tok_per_s=5.0),
+        _fake_matrix_result("int8", 50, tok_per_s=2.0),
+    ]
+    report = generate_matrix_report(results)
+    assert "15.4" in report  # 15.45 formatted to 3 sig figs
+    assert "6.03" in report
+    assert "fp32" in report and "int8" in report
+    assert "100MB" in report and "50MB" in report
+
+
+def test_matrix_report_shows_real_failures_not_hidden():
+    results = [
+        _fake_matrix_result("int4", 100, success=False, error="int4+offload unsupported"),
+    ]
+    report = generate_matrix_report(results)
+    assert "int4+offload unsupported" in report
+    assert "1 failed cell(s)" in report
+
+
+def test_matrix_report_with_no_results():
+    assert "No results to report" in generate_matrix_report([])

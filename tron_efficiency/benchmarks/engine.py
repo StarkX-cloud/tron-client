@@ -23,21 +23,51 @@ from tron_efficiency.workloads.config import WorkloadConfig
 from tron_efficiency.workloads.runner import run_workload
 
 
+def _run(config: WorkloadConfig, policy, isolated: bool):
+    """Dispatch to the in-process or subprocess-isolated runner.
+
+    ``run_workload`` is referenced as the module-level name (not imported
+    fresh here) so existing tests that monkeypatch
+    ``tron_efficiency.benchmarks.engine.run_workload`` keep working
+    unchanged when ``isolated=False`` (the default for library/test use —
+    see ``run_workload_isolated``'s docstring and ROADMAP.md's "real
+    segfault found during matrix-sweep development" entry for why
+    isolation exists and why it isn't the default everywhere: it adds a
+    full process-startup + torch/transformers-import cost per run, which
+    would make every fast unit test in this project slow and would break
+    the monkeypatch-based stubbing those tests rely on).
+    """
+    if isolated:
+        from tron_efficiency.workloads.isolated_runner import run_workload_isolated
+
+        return run_workload_isolated(config, policy)
+    return run_workload(config, policy)
+
+
 def run_suite(
     config: WorkloadConfig,
     policies: list[MemoryPolicy],
     hardware: HardwareInfo | None = None,
+    isolated: bool = False,
 ) -> list[BenchmarkResult]:
     """Run ``config`` under each policy and return one result per policy.
 
     All results share the one ``hardware`` snapshot taken at the start of
     the suite (hardware doesn't change mid-run on this machine).
+
+    ``isolated=True`` runs each policy in its own subprocess (see
+    ``workloads/isolated_runner.py``) so a native-level crash in one run
+    can't take the others down with it or kill the caller. Off by default
+    here (cheap, fast, two-policy comparisons are lower-risk and this
+    keeps the function fast/mockable for tests); the CLI turns it on by
+    default for the sweep commands specifically, where a crash partway
+    through would otherwise lose every result collected so far.
     """
     hardware = hardware or detect_hardware()
 
     results: list[BenchmarkResult] = []
     for policy in policies:
-        outcome = run_workload(config, policy)
+        outcome = _run(config, policy, isolated)
         result = BenchmarkResult.build(
             hardware=hardware,
             config=config,
@@ -56,6 +86,7 @@ def run_budget_sweep(
     include_baseline: bool = True,
     gpu_activation_headroom_fraction: float = DEFAULT_GPU_ACTIVATION_HEADROOM_FRACTION,
     hardware: HardwareInfo | None = None,
+    isolated: bool = False,
 ) -> list[BenchmarkResult]:
     """Run the same workload once per memory budget in
     ``memory_budgets_bytes`` (plus one unconstrained baseline, unless
@@ -84,13 +115,14 @@ def run_budget_sweep(
                 gpu_activation_headroom_fraction=gpu_activation_headroom_fraction,
             )
         )
-    return run_suite(config, policies, hardware=hardware)
+    return run_suite(config, policies, hardware=hardware, isolated=isolated)
 
 
 def run_dtype_sweep(
     config: WorkloadConfig,
     dtypes: list[str | None],
     hardware: HardwareInfo | None = None,
+    isolated: bool = False,
 ) -> list[BenchmarkResult]:
     """Run ``BaselinePolicy`` once per dtype in ``dtypes`` (e.g.
     ``["fp32", "fp16", "int8", "int4"]``), measuring quantization's actual
@@ -111,7 +143,7 @@ def run_dtype_sweep(
     results: list[BenchmarkResult] = []
     for dtype in dtypes:
         dtype_config = replace(config, dtype=dtype)
-        outcome = run_workload(dtype_config, BaselinePolicy())
+        outcome = _run(dtype_config, BaselinePolicy(), isolated)
         result = BenchmarkResult.build(
             hardware=hardware,
             config=dtype_config,
@@ -119,6 +151,65 @@ def run_dtype_sweep(
             outcome=outcome,
         )
         results.append(result)
+    return results
+
+
+def run_matrix_sweep(
+    config: WorkloadConfig,
+    dtypes: list[str | None],
+    memory_budgets_bytes: list[int],
+    gpu_activation_headroom_fraction: float = DEFAULT_GPU_ACTIVATION_HEADROOM_FRACTION,
+    hardware: HardwareInfo | None = None,
+    isolated: bool = False,
+) -> list[BenchmarkResult]:
+    """Cross ``run_budget_sweep``'s axis (memory budget) with
+    ``run_dtype_sweep``'s axis (dtype): run ``OffloadPolicy`` once per
+    (dtype, budget) pair, the full landscape in one pass instead of two
+    separate one-dimensional sweeps a caller would otherwise have to
+    reconcile by hand.
+
+    Deliberately does NOT skip combinations known to fail (e.g.
+    ``dtype="int4"`` -- unsupported with offload, see
+    ``memory/policies.py``'s ``UnsupportedDtypeCombination``): a real
+    failure is itself a real data point for the matrix, reported as such
+    (``outcome.success=False`` with the actual error), not silently
+    omitted. This is also the tool for properly characterizing
+    hardware-specific quirks found ad hoc during development (e.g. the
+    int8+offload CPU behavior documented in ROADMAP.md) instead of probing
+    one budget at a time by hand.
+
+    Strongly consider ``isolated=True`` here specifically: this is exactly
+    the function that found a real, reproducible segfault during
+    development (``OffloadPolicy``, ``dtype=None``, a 130MB budget on
+    this CPU machine — see
+    writeup/compute-efficiency-matrix-sweep-crash.md). A crash in one
+    (dtype, budget) cell will otherwise kill the whole matrix and lose
+    every cell collected so far, not just report that one cell failed.
+
+    Does not include an unconstrained baseline (that's a different axis
+    again -- combine with ``run_dtype_sweep(config, dtypes)`` separately if
+    a no-offload reference point is needed) and does not run the
+    correctness check the way ``run_budget_sweep`` does for a single dtype
+    (divergent text across *dtypes* is expected, same reasoning as
+    ``run_dtype_sweep``).
+    """
+    hardware = hardware or detect_hardware()
+    results: list[BenchmarkResult] = []
+    for dtype in dtypes:
+        dtype_config = replace(config, dtype=dtype)
+        for budget in sorted(memory_budgets_bytes, reverse=True):
+            policy = OffloadPolicy(
+                memory_budget_bytes=budget,
+                gpu_activation_headroom_fraction=gpu_activation_headroom_fraction,
+            )
+            outcome = _run(dtype_config, policy, isolated)
+            result = BenchmarkResult.build(
+                hardware=hardware,
+                config=dtype_config,
+                policy_description=policy.describe(),
+                outcome=outcome,
+            )
+            results.append(result)
     return results
 
 

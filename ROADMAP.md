@@ -776,3 +776,53 @@ technical design behind each phase.
   quantized when fp32/fp16 don't fit, the warning is attached with the
   real measured number, non-quantized recommendations carry no such
   warning). 273 passing (was 270).
+- [x] **Matrix sweep (dtype x budget) — found a real segfault, fixed it
+  by containment** (same day). `run_matrix_sweep` crosses both sweep axes
+  for `OffloadPolicy` in one pass, built specifically to properly
+  characterize the int8+offload CPU quirk above instead of probing one
+  budget at a time by hand. It found something more serious: a **real,
+  reproducible segfault** in `OffloadPolicy` itself, confirmed twice
+  independently (`pythia-70m`, CPU, 130MB budget, exit code 139 both
+  times) — full story in
+  `writeup/compute-efficiency-matrix-sweep-crash.md`. A segfault happens
+  below the Python interpreter and categorically cannot be caught by
+  `run_workload`'s `except Exception`; before this was found, hitting it
+  during a sweep would silently kill the whole process and lose every
+  result already collected, not just fail one cell.
+  **Fixed by containment, not a cure** (the crash itself is not root-
+  caused or explained): `tron_efficiency/workloads/isolated_runner.py`
+  runs each config in a `multiprocessing` (`spawn`) subprocess; a crash
+  shows up as a nonzero exit code the parent detects and reports as a
+  normal failed `RunOutcome`, so the sweep continues instead of dying. A
+  hang is bounded by a timeout (default 600s) instead of blocking
+  forever. Wired in as `--isolated`/`--no-isolated` on all three sweep
+  commands (on by default; off trades the safety for speed, since
+  isolation means paying a full Python/torch import cost per run).
+  **Honest complication:** re-running the identical crashing scenario
+  *through* isolation did not crash either time — this does not mean the
+  bug is fixed; it was independently reproduced twice outside isolation,
+  and the non-crash under isolation is equally explainable by
+  non-determinism or by `spawn`'s cleaner per-process state incidentally
+  avoiding the trigger. What *is* proven deterministically, independent
+  of whether the real crash reproduces on any given run: the containment
+  mechanism itself. `tests/test_efficiency_isolated_runner.py` verifies
+  crash/timeout/success handling against small functions that
+  crash/hang/succeed on purpose (`os._exit(1)`, `time.sleep()` past a
+  timeout, a normal return), not by hoping the flaky real trigger fires
+  on schedule.
+  **Not yet done:** the segfault itself remains un-root-caused (likely
+  somewhere in accelerate's disk-offload/safetensors mmap path, not
+  confirmed); unknown whether it's Windows-specific, CPU-specific, or a
+  broader issue — not tested on Linux or GPU; isolation is only wired
+  into the three sweep commands, not the single-run `run`/`compare`
+  commands, which still crash uninsulated same as before.
+  Tests: 3 new in `tests/test_efficiency_benchmarks_engine.py`
+  (dtype x budget coverage, real failures shown not hidden, budget
+  ordering), 3 new in `tests/test_efficiency_results.py` (matrix report
+  grid/failures/empty), 1 new in `tests/test_efficiency_api.py`
+  (`/matrix-sweep` endpoint), 6 new in
+  `tests/test_efficiency_isolated_runner.py` (the crash-containment
+  logic itself). 286 passing (was 273; one unrelated pre-existing flaky
+  test in `test_lora_over_wire.py` observed once, confirmed to pass
+  standalone and on a clean re-run of the full suite — not caused by this
+  work).

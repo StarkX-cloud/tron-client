@@ -146,6 +146,19 @@
   </section>
 
   <section>
+    <h2>Matrix sweep (dtype x budget, full landscape)</h2>
+    <form id="matrix-sweep-form">
+      <label>Model <input name="model" value="EleutherAI/pythia-70m" /></label>
+      <label>Device <select name="device"><option value="cpu">cpu</option><option value="cuda">cuda</option></select></label>
+      <label>Max new tokens <input name="max_new_tokens" type="number" value="16" /></label>
+      <label>Dtypes (comma-separated) <input name="dtypes" value="checkpoint-default,int8" /></label>
+      <label>Budgets (MB, comma-separated) <input name="memory_budget_mb_list" value="100,150,250" /></label>
+      <button type="submit" id="matrix-sweep-button">Run matrix sweep</button>
+    </form>
+    <pre id="matrix-sweep-output"></pre>
+  </section>
+
+  <section>
     <h2>Historical results</h2>
     <table id="runs-table">
       <thead>
@@ -304,6 +317,35 @@ document.getElementById('dtype-sweep-form').addEventListener('submit', async (e)
         model: data.model, device: data.device,
         max_new_tokens: parseInt(data.max_new_tokens, 10),
         dtypes: dtypes,
+      }),
+    });
+    const body = await res.json();
+    output.textContent = body.report || JSON.stringify(body, null, 2);
+    await loadRuns();
+  } catch (err) {
+    output.textContent = 'Request failed: ' + err;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('matrix-sweep-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = document.getElementById('matrix-sweep-button');
+  const output = document.getElementById('matrix-sweep-output');
+  const data = Object.fromEntries(new FormData(e.target).entries());
+  const dtypes = data.dtypes.split(',').map(s => s.trim()).filter(Boolean);
+  const budgets = data.memory_budget_mb_list.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+  button.disabled = true;
+  output.textContent = 'Running matrix sweep — one real run per (dtype, budget) pair, this may take a while...';
+  try {
+    const res = await fetch('/matrix-sweep', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        model: data.model, device: data.device,
+        max_new_tokens: parseInt(data.max_new_tokens, 10),
+        dtypes: dtypes, memory_budget_mb_list: budgets,
       }),
     });
     const body = await res.json();

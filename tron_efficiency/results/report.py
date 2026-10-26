@@ -258,3 +258,90 @@ def generate_dtype_sweep_report(results: list[BenchmarkResult]) -> str:
         lines.append("")
 
     return "\n".join(lines) + "\n"
+
+
+def generate_matrix_report(results: list[BenchmarkResult]) -> str:
+    """Report a dtype x budget matrix sweep (see benchmarks/engine.py's
+    run_matrix_sweep) as a grid: one row per budget, one column per dtype,
+    cells showing throughput — or the real failure reason, never hidden,
+    for combinations that don't work (e.g. int4+offload). This is the tool
+    for seeing the whole landscape (where does each dtype's cliff sit, and
+    which combinations simply don't work) in one pass.
+    """
+    if not results:
+        return "# Matrix sweep report\n\nNo results to report.\n"
+
+    dtypes: list[str | None] = []
+    budgets: list[int] = []
+    for r in results:
+        if r.config.dtype not in dtypes:
+            dtypes.append(r.config.dtype)
+        budget = r.policy.get("memory_budget_bytes")
+        if budget is not None and budget not in budgets:
+            budgets.append(budget)
+    budgets.sort(reverse=True)
+
+    by_cell = {
+        (r.config.dtype, r.policy.get("memory_budget_bytes")): r for r in results
+    }
+
+    lines = ["# Matrix sweep report", ""]
+    lines.append(
+        f"{len(results)} run(s) across {len(dtypes)} dtype(s) x {len(budgets)} budget(s)."
+    )
+    lines.append("")
+
+    dtype_labels = [d or "checkpoint-default" for d in dtypes]
+    lines.append("## Throughput (tokens/sec) — FAILED cells show the real error")
+    lines.append("")
+    lines.append("| Budget | " + " | ".join(dtype_labels) + " |")
+    lines.append("|---" * (len(dtype_labels) + 1) + "|")
+    for budget in budgets:
+        cells = []
+        for dtype in dtypes:
+            r = by_cell.get((dtype, budget))
+            if r is None:
+                cells.append("-")
+            elif r.outcome.success:
+                cells.append(f"{r.outcome.tokens_per_second:,.3g}")
+            else:
+                cells.append(f"FAILED: {r.outcome.error}")
+        lines.append(f"| {budget / (1024 * 1024):.0f}MB | " + " | ".join(cells) + " |")
+    lines.append("")
+
+    lines.append("## Peak memory (bytes)")
+    lines.append("")
+    lines.append("| Budget | " + " | ".join(dtype_labels) + " |")
+    lines.append("|---" * (len(dtype_labels) + 1) + "|")
+    for budget in budgets:
+        cells = []
+        for dtype in dtypes:
+            r = by_cell.get((dtype, budget))
+            if r is None or not r.outcome.success:
+                cells.append("-")
+            else:
+                mem = r.outcome.peak_gpu_memory_allocated_bytes or r.outcome.peak_cpu_memory_bytes
+                cells.append("-" if mem is None else f"{mem:,.4g}")
+        lines.append(f"| {budget / (1024 * 1024):.0f}MB | " + " | ".join(cells) + " |")
+    lines.append("")
+
+    failed = [r for r in results if not r.outcome.success]
+    if failed:
+        lines.append(
+            f"## {len(failed)} failed cell(s) — shown, not hidden: a real failure is a real data point"
+        )
+        for r in failed:
+            label = r.config.dtype or "checkpoint-default"
+            budget = r.policy.get("memory_budget_bytes")
+            budget_label = f"{budget / (1024 * 1024):.0f}MB" if budget else "?"
+            lines.append(f"- `{label} @ {budget_label}`: {r.outcome.error}")
+        lines.append("")
+
+    all_warnings = [w for r in results for w in r.warnings]
+    if all_warnings:
+        lines.append("## Warnings carried from individual runs")
+        for w in sorted(set(all_warnings)):
+            lines.append(f"- {w}")
+        lines.append("")
+
+    return "\n".join(lines) + "\n"

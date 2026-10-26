@@ -139,3 +139,69 @@ def test_run_dtype_sweep_supports_none_for_checkpoint_default(monkeypatch):
     results = engine_module.run_dtype_sweep(config, [None, "fp16"], hardware=_fake_hardware())
     assert results[0].config.dtype is None
     assert results[1].config.dtype == "fp16"
+
+
+def _install_fake_matrix_run_workload(monkeypatch, fail_combos=None):
+    """fail_combos: optional set of (dtype, memory_budget_bytes) tuples that
+    should return a failed outcome instead of success -- for simulating
+    e.g. a known-unsupported combination like int4+offload."""
+    fail_combos = fail_combos or set()
+
+    def fake_run_workload(config, policy):
+        key = (config.dtype, policy.memory_budget_bytes)
+        if key in fail_combos:
+            return RunOutcome(
+                success=False, policy_name=policy.name,
+                error=f"simulated failure for {key}",
+            )
+        return RunOutcome(
+            success=True,
+            policy_name=policy.name,
+            load_time_seconds=0.1,
+            time_to_first_token_seconds=0.01,
+            end_to_end_latency_seconds=0.5,
+            tokens_generated=config.max_new_tokens,
+            tokens_per_second=config.max_new_tokens / 0.5,
+            peak_cpu_memory_bytes=1000,
+            generated_text="text",
+        )
+
+    monkeypatch.setattr(engine_module, "run_workload", fake_run_workload)
+
+
+def test_run_matrix_sweep_covers_every_dtype_budget_pair(monkeypatch):
+    _install_fake_matrix_run_workload(monkeypatch)
+    config = WorkloadConfig(model_name="fake/model")
+    results = engine_module.run_matrix_sweep(
+        config, ["fp32", "int8"], [50 * 1024 * 1024, 100 * 1024 * 1024],
+        hardware=_fake_hardware(),
+    )
+    assert len(results) == 4  # 2 dtypes x 2 budgets
+    pairs = {(r.config.dtype, r.policy.get("memory_budget_bytes")) for r in results}
+    assert pairs == {
+        ("fp32", 50 * 1024 * 1024), ("fp32", 100 * 1024 * 1024),
+        ("int8", 50 * 1024 * 1024), ("int8", 100 * 1024 * 1024),
+    }
+
+
+def test_run_matrix_sweep_reports_real_failures_not_hiding_them(monkeypatch):
+    budget = 50 * 1024 * 1024
+    _install_fake_matrix_run_workload(monkeypatch, fail_combos={("int4", budget)})
+    config = WorkloadConfig(model_name="fake/model")
+    results = engine_module.run_matrix_sweep(
+        config, ["int4"], [budget], hardware=_fake_hardware()
+    )
+    assert len(results) == 1
+    assert results[0].outcome.success is False
+    assert "simulated failure" in results[0].outcome.error
+
+
+def test_run_matrix_sweep_orders_budgets_largest_first_per_dtype(monkeypatch):
+    _install_fake_matrix_run_workload(monkeypatch)
+    config = WorkloadConfig(model_name="fake/model")
+    budgets = [50 * 1024 * 1024, 200 * 1024 * 1024, 100 * 1024 * 1024]
+    results = engine_module.run_matrix_sweep(
+        config, ["fp32"], budgets, hardware=_fake_hardware()
+    )
+    budget_order = [r.policy.get("memory_budget_bytes") for r in results]
+    assert budget_order == sorted(budgets, reverse=True)

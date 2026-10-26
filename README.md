@@ -137,6 +137,8 @@ python -m tron_efficiency.cli run --policy baseline     # plain load + generate
 python -m tron_efficiency.cli run --policy offload --memory-budget-mb 100
 python -m tron_efficiency.cli compare --memory-budget-mb 100 --hourly-rate 0.50
 python -m tron_efficiency.cli sweep --memory-budget-mb-list 50,100,200,400
+python -m tron_efficiency.cli dtype-sweep --dtypes fp32,fp16,int8,int4
+python -m tron_efficiency.cli matrix-sweep --dtypes checkpoint-default,int8 --memory-budget-mb-list 100,150,250
 python -m tron_efficiency.cli serve                      # API + dashboard on :9100 (TRON_EFFICIENCY_PORT)
 ```
 
@@ -336,6 +338,26 @@ same convention as `tron/training/benchmark_lora.py`'s ~20-minute real run).
   not yet measured). "Quantize for a speed win" turned out to be the GPU
   story, not a universal one; measuring this before claiming it avoided
   shipping a false claim.
+- **`cli matrix-sweep --dtypes checkpoint-default,int8 --memory-budget-mb-list 100,150,250`
+  (API: `POST /matrix-sweep`)** crosses both axes — every (dtype, budget)
+  pair for `OffloadPolicy` in one pass, the full landscape instead of two
+  separate sweeps a caller would otherwise have to reconcile by hand.
+  Building this to properly characterize the int8+offload CPU quirk above
+  surfaced something more serious: **a real, reproducible segfault** in
+  `OffloadPolicy` itself (confirmed twice, `pythia-70m`, CPU, a 130MB
+  budget — full story in
+  [writeup/compute-efficiency-matrix-sweep-crash.md](writeup/compute-efficiency-matrix-sweep-crash.md)).
+  A segfault can't be caught by Python's `try/except`, so it would
+  otherwise kill an entire sweep and lose every result collected so far.
+  **Fixed by containment, not a cure:** `workloads/isolated_runner.py` runs
+  each config in its own subprocess; a crash there is detected (nonzero
+  exit code) and reported as a normal failed result instead of taking the
+  caller down too. On by default for all three sweep commands
+  (`--isolated`/`--no-isolated`). The crash-handling logic itself is
+  proven deterministically in tests against functions that crash/hang/
+  succeed on purpose — not by hoping the flaky real trigger reproduces on
+  demand (it didn't, both times it was retried under isolation; the
+  write-up explains why that's inconclusive, not a fix).
 - Single model family tested per environment (`pythia-70m` on CPU,
   `pythia-410m`/`pythia-1.4b` on the GPU runs); still only a handful of
   models total.

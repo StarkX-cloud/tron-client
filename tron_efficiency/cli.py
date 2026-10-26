@@ -7,6 +7,7 @@
     python -m tron_efficiency.cli compare --memory-budget-mb 128
     python -m tron_efficiency.cli sweep --memory-budget-mb-list 50,100,200,400
     python -m tron_efficiency.cli dtype-sweep --dtypes fp32,fp16,int8,int4
+    python -m tron_efficiency.cli matrix-sweep --dtypes fp32,int8 --memory-budget-mb-list 100,200
     python -m tron_efficiency.cli report <run_id> [<run_id> ...]
     python -m tron_efficiency.cli serve
 """
@@ -112,7 +113,9 @@ def cmd_sweep(args) -> int:
 
     config = _build_config(args)
     budgets_bytes = [mb * 1024 * 1024 for mb in args.memory_budget_mb_list]
-    results = run_budget_sweep(config, budgets_bytes, include_baseline=not args.no_baseline)
+    results = run_budget_sweep(
+        config, budgets_bytes, include_baseline=not args.no_baseline, isolated=args.isolated
+    )
     for r in results:
         save_run(r)
         _print_outcome(r)
@@ -133,12 +136,34 @@ def cmd_dtype_sweep(args) -> int:
         device=args.device,
     )
     dtypes = [None if d == "checkpoint-default" else d for d in args.dtypes]
-    results = run_dtype_sweep(config, dtypes)
+    results = run_dtype_sweep(config, dtypes, isolated=args.isolated)
     for r in results:
         save_run(r)
         _print_outcome(r)
     print()
     print(generate_dtype_sweep_report(results))
+    return 0
+
+
+def cmd_matrix_sweep(args) -> int:
+    from tron_efficiency.benchmarks.engine import run_matrix_sweep
+    from tron_efficiency.results.report import generate_matrix_report
+
+    config = WorkloadConfig(
+        model_name=args.model,
+        prompt=args.prompt,
+        max_new_tokens=args.max_new_tokens,
+        batch_size=args.batch_size,
+        device=args.device,
+    )
+    dtypes = [None if d == "checkpoint-default" else d for d in args.dtypes]
+    budgets_bytes = [mb * 1024 * 1024 for mb in args.memory_budget_mb_list]
+    results = run_matrix_sweep(config, dtypes, budgets_bytes, isolated=args.isolated)
+    for r in results:
+        save_run(r)
+        _print_outcome(r)
+    print()
+    print(generate_matrix_report(results))
     return 0
 
 
@@ -230,6 +255,16 @@ def build_parser() -> argparse.ArgumentParser:
     sweep_p.add_argument(
         "--no-baseline", action="store_true", help="skip the unconstrained baseline run"
     )
+    sweep_p.add_argument(
+        "--isolated",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="run each config in its own subprocess so a native-level crash (a real "
+        "one was found and reproduced during development -- see ROADMAP.md) can't "
+        "kill the whole sweep and lose every other result. On by default; costs real "
+        "wall-clock time (a full process start + torch import per run) -- pass "
+        "--no-isolated to trade that safety for speed.",
+    )
     sweep_p.set_defaults(func=cmd_sweep)
 
     def _parse_dtype_list(value: str) -> list[str]:
@@ -251,7 +286,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="comma-separated dtypes to compare, e.g. fp32,fp16,int8,int4 "
         "('checkpoint-default' means no torch_dtype passed at all, the old behavior)",
     )
+    dtype_sweep_p.add_argument(
+        "--isolated",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="run each dtype in its own subprocess (see sweep's --isolated for why). "
+        "On by default; pass --no-isolated to trade that safety for speed.",
+    )
     dtype_sweep_p.set_defaults(func=cmd_dtype_sweep)
+
+    matrix_sweep_p = sub.add_parser(
+        "matrix-sweep",
+        help="cross dtypes x memory budgets for OffloadPolicy -- the full landscape in one pass",
+    )
+    matrix_sweep_p.add_argument("--model", default="EleutherAI/pythia-70m")
+    matrix_sweep_p.add_argument("--prompt", default=WorkloadConfig().prompt)
+    matrix_sweep_p.add_argument("--max-new-tokens", type=int, default=32)
+    matrix_sweep_p.add_argument("--batch-size", type=int, default=1)
+    matrix_sweep_p.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
+    matrix_sweep_p.add_argument(
+        "--dtypes",
+        type=_parse_dtype_list,
+        default=["checkpoint-default", "int8"],
+        help="comma-separated dtypes, e.g. fp32,int8 ('checkpoint-default' = no dtype kwarg passed)",
+    )
+    matrix_sweep_p.add_argument(
+        "--memory-budget-mb-list",
+        type=_parse_mb_list,
+        required=True,
+        help="comma-separated budgets in MB, e.g. 50,100,200,400",
+    )
+    matrix_sweep_p.add_argument(
+        "--isolated",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="run each (dtype, budget) cell in its own subprocess -- this is exactly "
+        "the command that found a real, reproducible segfault during development "
+        "(see ROADMAP.md). On by default; pass --no-isolated to trade that safety "
+        "for speed.",
+    )
+    matrix_sweep_p.set_defaults(func=cmd_matrix_sweep)
 
     report_p = sub.add_parser("report", help="render a report from saved runs")
     report_p.add_argument("run_ids", nargs="*")
