@@ -826,3 +826,36 @@ technical design behind each phase.
   test in `test_lora_over_wire.py` observed once, confirmed to pass
   standalone and on a clean re-run of the full suite — not caused by this
   work).
+
+- [x] **`tron_router/` — the routing layer, the first thing connecting
+  single-node efficiency to the distributed pool** (new branch,
+  `feat/compute-routing-layer`). `decide_placement(job)` picks `local`
+  (the `tron_efficiency` advisor says it fits without offload), `pooled`
+  (a real live `queue_server.py` instance is reachable with fresh-
+  heartbeat workers — routes into the existing `tron/spine/matcher.py`
+  job path, doesn't reimplement its placement logic), or `dedicated`
+  (nothing else is a safe answer — a flag for real infrastructure this
+  project doesn't provision, not an API call to a cloud provider). Same
+  confidence/rationale/warnings discipline as the memory advisor.
+  Full real, live verification (not just unit tests) in
+  `writeup/compute-routing-layer.md`: started a real `queue_server.py`,
+  confirmed unreachable-pool, empty-pool, and one-real-registered-worker
+  behavior, confirmed a real small model short-circuits straight to
+  `local` without ever querying the pool. `tron_efficiency` and `tron`
+  remain mutually independent — this package imports from both, neither
+  is modified to depend on the other.
+  **Honest scope:** every "worker" tested here was this project's own
+  existing registration mechanism run locally — no real external/
+  untrusted fleet has ever been tested against this router or the matcher
+  it routes into (inherits the existing "no real second physical host"
+  gap, doesn't close it). The pool-health signal is coarse (worker count,
+  reported memory, heartbeat freshness) — doesn't yet use the real
+  measured bandwidth/latency `tron/spine/topology.py` already tracks
+  internally (not exposed via a public endpoint yet). No automated test
+  exercises the actual hand-off into the matcher's real job-submission
+  path after a `pooled` decision — this decides a job *should* go there,
+  doesn't yet verify the hand-off works end to end.
+  Tests: 7 new in `tests/test_router_decision.py`, all via dependency
+  injection (fake hardware, fake/injected pool status) — no network calls
+  in the test suite itself, only in the separate manual live-verification
+  session. 293 passing (was 286).

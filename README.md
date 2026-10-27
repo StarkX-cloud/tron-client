@@ -373,6 +373,30 @@ package (not just the mechanism) end-to-end on a CUDA machine — CLI,
 benchmark engine, API, dashboard all pointed at a real GPU — to close the
 integration gap the standalone validation script doesn't cover.
 
+## Routing layer (`tron_router/`)
+
+The first thing connecting single-node efficiency to the distributed
+pool. `decide_placement(job)` picks `local` (fits on this machine without
+offload — real `tron_efficiency` advisor check), `pooled` (a real live
+`queue_server.py` is reachable with fresh workers — routes into the
+existing matcher's job path), or `dedicated` (nothing else is safe — a
+flag for real infrastructure this project doesn't provision, not an
+automatic cloud API call):
+
+```bash
+python -m tron_router.cli pool-status --master-url http://localhost:9000
+python -m tron_router.cli decide --model EleutherAI/pythia-70m
+python -m tron_router.cli decide --model meta-llama/Llama-2-7b-hf --multi-node --master-url http://localhost:9000
+```
+
+Verified live against a real running `queue_server.py` (started it,
+registered a real worker, confirmed every branch — unreachable, empty,
+one-worker-pooled, local-without-ever-querying-the-pool) — see
+[writeup/compute-routing-layer.md](writeup/compute-routing-layer.md) for
+the full session, and `ROADMAP.md`'s entry for the honest scope: every
+worker tested here was this project's own machine, not a real external
+fleet, and `dedicated` is a flag, not a provisioning mechanism.
+
 ## Contributing / picking up a phase
 
 See [ROADMAP.md](ROADMAP.md) for the current phase breakdown. Phase 2
