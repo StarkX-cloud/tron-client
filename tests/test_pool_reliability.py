@@ -138,3 +138,50 @@ def test_a_dead_workers_job_is_requeued_and_finished_by_another_real_worker(
     assert result["result"] == 42  # the real deserialized _multiply(6, 7), survived the requeue
 
     assert future.get(timeout=5) == 42
+
+
+def test_a_job_whose_every_worker_dies_gives_up_instead_of_requeuing_forever(
+    live_master_with_watchdog, tmp_path, monkeypatch
+):
+    """The retry-count cap this project's own watchdog was missing until
+    now (writeup/compute-routing-layer.md names it as a real gap found
+    while verifying the requeue path): a job whose every assigned worker
+    dies in turn must eventually give up rather than requeue forever."""
+    master_url, qs = live_master_with_watchdog
+    qs.MAX_JOB_REQUEUE_ATTEMPTS = 2
+    job = JobRequest(model_name="fake/model")
+    decision = PlacementDecision(target="pooled", confidence="low")
+
+    future = submit_to_pool(job, decision, _multiply, func_args=(2, 3), master_url=master_url)
+    job_id = future.job_id
+
+    for attempt in range(qs.MAX_JOB_REQUEUE_ATTEMPTS + 1):
+        worker_mod, token = _new_worker(master_url, tmp_path, monkeypatch, f"worker-doomed-{attempt}")
+        claimed = None
+        deadline = time.time() + 5
+        while claimed is None and time.time() < deadline:
+            claimed = worker_mod.fetch_next_job(token)
+            if claimed is None:
+                time.sleep(0.1)
+        assert claimed is not None and claimed["id"] == job_id, f"attempt {attempt} never got the job"
+
+        deadline = time.time() + 15
+        gave_up_or_requeued = False
+        while time.time() < deadline:
+            with qs.lock:
+                status = qs.job_store[job_id]["status"]
+                still_running = job_id in qs.running_jobs
+            if status == "queued" or (status == "completed" and not still_running):
+                gave_up_or_requeued = True
+                break
+            time.sleep(0.25)
+        assert gave_up_or_requeued, f"watchdog never acted on attempt {attempt}"
+
+    with qs.lock:
+        final = dict(qs.job_store[job_id])
+        still_queued = any(j["id"] == job_id for j in qs.job_queue)
+
+    assert not still_queued, "job kept requeuing past the configured cap"
+    assert final["status"] == "completed"
+    assert final["result"]["status"] == "error"
+    assert "gave up after" in final["result"]["error"]

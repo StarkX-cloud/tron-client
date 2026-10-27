@@ -943,10 +943,7 @@ technical design behind each phase.
   surviving the requeue intact). This passed on the first real run.
   **What this does and does not prove:** it proves the requeue mechanism
   works for one dead worker, one job, in this test's conditions. It does
-  *not* prove anything about a worker that dies and is replaced
-  repeatedly (no retry-count cap exists — a job whose every assigned
-  worker dies would requeue forever, which is itself worth noting as a
-  real gap, not fixed here), a worker that's hung-but-still-heartbeating
+  *not* prove anything about a worker that's hung-but-still-heartbeating
   (the watchdog only catches a stale heartbeat, not a worker that's
   alive but stuck), or anything at real-fleet scale with real untrusted
   machines — ROADMAP's "no real second physical host" gap is unchanged.
@@ -954,3 +951,23 @@ technical design behind each phase.
   once and repeated in later entries without re-checking can be stale —
   worth a real test before restating it again.
   Tests: 1 new in `tests/test_pool_reliability.py`. 303 passing (was 302).
+
+- [x] **The retry-count cap the previous entry flagged as missing
+  (no fix at the time) — fixed.** A job whose every assigned worker died
+  in turn would requeue forever; `_watchdog_loop` now tracks a real
+  `requeue_count` on the job itself (added to `/submit`'s job dict,
+  defaults to 0) and, once a job exceeds `MAX_JOB_REQUEUE_ATTEMPTS`
+  (env `TRON_MAX_JOB_REQUEUE_ATTEMPTS`, default 3) dead-worker requeues,
+  gives up: marks it `completed` with a real
+  `{"status": "error", "error": "gave up after N requeue(s) -- ..."}`
+  result (same shape a failing submitted function already produces, not
+  a new status value) instead of silently requeuing it again. Emits a
+  real `"failed"` spine event so `recover_orphaned_tasks` correctly
+  stops returning it.
+  Verified for real in a new test in `tests/test_pool_reliability.py`:
+  `MAX_JOB_REQUEUE_ATTEMPTS` set to 2, three real doomed workers in a
+  row each claim the same job and die, and the job is confirmed to stop
+  requeuing after the second real requeue and resolve to a real error
+  result on the third — not inferred from logs, read directly off
+  `job_store`/`job_queue` state.
+  Tests: 1 new in `tests/test_pool_reliability.py`. 304 passing (was 303).

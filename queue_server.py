@@ -260,6 +260,11 @@ event_bus = defaultdict(list)
 
 HEARTBEAT_TIMEOUT_SECONDS = 20.0
 MATCH_INTERVAL_SECONDS = 1.0
+# Without a cap, a job whose every assigned worker dies in turn would
+# requeue forever -- a real gap found while verifying the watchdog's
+# requeue path for real (see tests/test_pool_reliability.py and
+# writeup/compute-routing-layer.md), not a hypothetical one.
+MAX_JOB_REQUEUE_ATTEMPTS = int(os.environ.get("TRON_MAX_JOB_REQUEUE_ATTEMPTS", "3"))
 
 # =========================
 # EMIT
@@ -473,6 +478,13 @@ def submit(job: dict):
         # global_brain.decide — 0 (the default) leaves placement exactly as
         # it was before bandwidth scoring existed.
         "transfer_bytes": float(job.get("transfer_bytes", 0) or 0),
+        # How many times _watchdog_loop has already requeued this job
+        # after a dead worker was holding it. Without this a job whose
+        # every assigned worker dies in turn would requeue forever,
+        # which was a real gap found and left unfixed in
+        # writeup/compute-routing-layer.md -- MAX_JOB_REQUEUE_ATTEMPTS
+        # below is the fix.
+        "requeue_count": 0,
     }
 
     if raw_job["function"] is None:
@@ -1145,14 +1157,34 @@ def _watchdog_loop():
                 job_id = task.task_id
                 with lock:
                     running = running_jobs.pop(job_id, None)
-                    if job_id in job_store:
-                        job_store[job_id]["status"] = "queued"
-                    if running is not None:
-                        job_queue.append(running["job"])
+                    job = running["job"] if running is not None else None
+                    requeue_count = (job.get("requeue_count", 0) + 1) if job is not None else None
+                    gave_up = job is not None and requeue_count > MAX_JOB_REQUEUE_ATTEMPTS
+                    if gave_up:
+                        if job_id in job_store:
+                            job_store[job_id]["status"] = "completed"
+                            job_store[job_id]["result"] = {
+                                "status": "error",
+                                "error": (
+                                    f"gave up after {MAX_JOB_REQUEUE_ATTEMPTS} requeue(s) -- "
+                                    f"every worker assigned this job died before completing it"
+                                ),
+                            }
+                    else:
+                        if job_id in job_store:
+                            job_store[job_id]["status"] = "queued"
+                        if job is not None:
+                            job["requeue_count"] = requeue_count
+                            job_queue.append(job)
                 # dead worker — its in-flight transfer isn't happening;
                 # free the window budget so a live worker can take the job.
                 load_shaper.release(job_id)
-                event_log.append(job_id, "requeued", {"reason": "node_timeout", "dead_node": worker_name})
+                if gave_up:
+                    event_log.append(job_id, "failed", {
+                        "reason": "max_requeue_attempts_exceeded", "dead_node": worker_name,
+                    })
+                else:
+                    event_log.append(job_id, "requeued", {"reason": "node_timeout", "dead_node": worker_name})
             with lock:
                 if worker_name in workers:
                     workers[worker_name]["status"] = "offline"

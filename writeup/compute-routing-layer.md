@@ -230,12 +230,26 @@ This passed on its first real run.
 
 **What this does and does not prove:** it proves the requeue mechanism
 works for one dead worker, one job. It does **not** prove anything
-about: a worker that dies and is replaced repeatedly (there's no
-retry-count cap — a job whose every assigned worker dies in turn would
-requeue forever; a real, newly-identified gap, not fixed here); a
-worker that's hung but still heartbeating (the watchdog only catches a
-stale heartbeat, not a stuck-but-alive worker); or anything at real
-untrusted-fleet scale (the project's standing "no real second physical
-host" gap is unchanged by this). The honest lesson for future work on
-this repo: a limitation written down once and repeated in later entries
-without re-checking it can quietly go stale. This one did.
+about a worker that's hung but still heartbeating (the watchdog only
+catches a stale heartbeat, not a stuck-but-alive worker), or anything
+at real untrusted-fleet scale (the project's standing "no real second
+physical host" gap is unchanged by this). The honest lesson for future
+work on this repo: a limitation written down once and repeated in
+later entries without re-checking it can quietly go stale. This one did.
+
+**The one real gap this test run *did* immediately turn up** — no
+retry-count cap, so a job whose every assigned worker dies in turn
+would requeue forever — was fixed right after, not left as a TODO.
+`_watchdog_loop` now tracks `requeue_count` on the job dict itself
+(added in `/submit`, default 0) and gives up once it exceeds
+`MAX_JOB_REQUEUE_ATTEMPTS` (env `TRON_MAX_JOB_REQUEUE_ATTEMPTS`, default
+3): the job resolves to a real `{"status": "error", "error": "gave up
+after N requeue(s) -- ..."}` result — the same result shape a failing
+submitted function already produces, not an invented new status — and
+a real `"failed"` spine event is emitted so the task stops being
+returned by `recover_orphaned_tasks` on a later watchdog pass. A second
+new test drives this for real: `MAX_JOB_REQUEUE_ATTEMPTS` set to 2,
+three real doomed workers in a row each claim and die on the same job,
+and the job is confirmed (by reading real `job_store`/`job_queue`
+state, not inferring it) to stop requeuing after the second real
+requeue and resolve to a real error on the third.

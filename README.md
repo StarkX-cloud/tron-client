@@ -426,9 +426,15 @@ already requeues a dead worker's orphaned job via the spine's event
 log, and [tests/test_pool_reliability.py](tests/test_pool_reliability.py)
 proves it survives end-to-end through the real submission path — a
 real dead worker, a real requeue, a second real worker completing the
-same job, and the *original* `MagicFuture` resolving correctly. See
+same job, and the *original* `MagicFuture` resolving correctly. That
+same test run surfaced one real gap — no cap on retries, so a job whose
+every worker died in turn would requeue forever — fixed immediately
+after: `MAX_JOB_REQUEUE_ATTEMPTS` (default 3,
+`TRON_MAX_JOB_REQUEUE_ATTEMPTS`) now makes a job give up with a real
+error result instead, also proven with a real three-doomed-workers
+test. See
 [writeup/compute-routing-layer.md](writeup/compute-routing-layer.md)
-for what this does and doesn't prove.
+for the full detail.
 
 ## Contributing / picking up a phase
 
