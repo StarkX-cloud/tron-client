@@ -523,6 +523,25 @@ def get_workers():
     return workers
 
 
+@app.get("/topology")
+def get_topology():
+    """Real measured master<->worker latency/bandwidth -- the same
+    numbers match_jobs_to_workers() already uses internally for
+    placement (see tron/spine/topology.py), just not previously exposed
+    for an external caller (like tron_router) to read. None for either
+    field means "never measured yet, or the measurement aged out" -- not
+    a fabricated 0."""
+    with lock:
+        names = list(workers.keys())
+    return {
+        name: {
+            "latency_ms": topology.latency("master", name),
+            "bandwidth_mbps": topology.bandwidth("master", name),
+        }
+        for name in names
+    }
+
+
 @app.get("/running")
 def get_running():
     return running_jobs

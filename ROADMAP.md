@@ -894,3 +894,27 @@ technical design behind each phase.
   retry/reliability handling for a pooled worker that drops mid-job —
   that gap (no defense against an unreliable participant) is unchanged.
   Tests: 3 new in `tests/test_router_handoff.py`. 296 passing (was 293).
+
+- [x] **The pool-health signal now uses real measured network data, not
+  just worker count/memory** — closing the other half of the gap the
+  routing-layer entry above named. `queue_server.py` gets a new
+  `GET /topology` endpoint exposing the real per-worker latency/
+  bandwidth `tron/spine/topology.py` already tracked internally for the
+  matcher's own placement scoring, but never exposed to an external
+  caller. `tron_router.decision.query_pool_status` reads it (best-effort
+  — its absence doesn't make the pool unreachable, since `/workers`
+  already answered that) and `PoolStatus` carries the real per-worker
+  `measured_links`. `decide_placement`'s `pooled` rationale now cites the
+  real averaged latency/bandwidth across alive workers that have been
+  measured, and adds an honest warning instead when none have (the
+  matcher would be placing blind to real network cost) or when
+  `/topology` itself wasn't reachable. No invented thresholds — this
+  surfaces the real numbers and their absence, it doesn't yet use them
+  to change which target gets picked (that would need calibration data
+  this project doesn't have).
+  Tests: 1 new in `tests/test_queue_server_topology.py` (the real
+  endpoint), 2 new in `tests/test_router_topology.py` (a real live
+  `uvicorn` server, proving `query_pool_status` actually reads real
+  measured data over real HTTP — not a mock), 3 new in
+  `tests/test_router_decision.py` (pure unit tests of the rationale/
+  warning logic via injected `measured_links`). 302 passing (was 296).

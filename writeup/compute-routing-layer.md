@@ -69,12 +69,12 @@ Started a real `queue_server.py` instance locally and drove
 - "Dedicated" is a flag, not a mechanism. This project does not provision
   real cloud/dedicated compute on a caller's behalf, and `decide_placement`
   does not pretend otherwise.
-- The pool-health signal here is coarse: worker count and reported
-  memory, heartbeat freshness. It does not yet use the real measured
+- The pool-health signal here was coarse: worker count and reported
+  memory, heartbeat freshness. It did not use the real measured
   bandwidth/latency data `tron/spine/topology.py` already tracks
-  internally inside a running `queue_server.py` process (that data isn't
-  exposed via a public endpoint yet) — a real, worthwhile next
-  improvement, not done here.
+  internally inside a running `queue_server.py` process, because that
+  data wasn't exposed via a public endpoint.
+  **(Closed below — see "Real network data" section.)**
 - No automated test exercises the actual hand-off into
   `tron/spine/matcher.py`'s real job-submission path after a `pooled`
   decision — this module decides a job *should* go there; it doesn't yet
@@ -133,3 +133,55 @@ available to finish it just never completes; nothing here adds the
 reliability guarantee ROADMAP.md already names as missing for an
 unreliable or untrusted participant. Every worker exercised by this
 test is still this project's own machine, not a real external fleet.
+
+## Real network data: `/topology` and `measured_links`
+
+`decide_placement`'s "pooled" recommendation used to look only at worker
+count and self-reported memory. `tron/spine/topology.py` already tracks
+the real signal that actually matters for "is this a cheap or expensive
+pool to hand work to" — smoothed latency and bandwidth, measured from
+real heartbeats and real payload transfers (`/probe/blob`,
+`/probe/sink`) — but nothing outside `queue_server.py`'s own process
+could read it.
+
+`queue_server.py` now exposes `GET /topology`: per-registered-worker
+`latency_ms`/`bandwidth_mbps`, `None` for either field when never
+measured or aged out (never a fabricated 0). `query_pool_status` reads
+it as a best-effort second call after `/workers` — if `/topology` isn't
+reachable (an older master, or any other server answering `/workers`'
+shape), `measured_links` is just `None`; the pool isn't marked
+unreachable over it, since `/workers` already answered that question.
+
+`decide_placement` now adds this to a `pooled` decision's rationale when
+real data exists (`"2/2 alive worker(s) have real measured network
+data: avg latency 20.0ms, avg bandwidth 75.0Mbps"`), and an honest
+warning when it doesn't — either no alive worker has been measured yet,
+or `/topology` itself couldn't be read. No invented latency/bandwidth
+thresholds were added to the decision logic itself — there's no
+calibration data yet for "how slow is too slow to pool," so this closes
+the *visibility* gap (the real numbers are now surfaced, every time)
+without pretending to close a *threshold* gap that would need real
+measurement to calibrate honestly.
+
+**Real verification:**
+- `tests/test_queue_server_topology.py`: `GET /topology` against a real
+  FastAPI `TestClient`, confirming a heartbeating worker's real latency
+  shows up and a never-heartbeated worker shows `None` for both fields,
+  not an error.
+- `tests/test_router_topology.py`: the only test (alongside
+  `test_router_handoff.py`) that runs a real `uvicorn` server on a real
+  socket — proving `query_pool_status` reads real latency over real HTTP
+  from a worker that actually heartbeated, and reads real `None`s for
+  one that only registered.
+- `tests/test_router_decision.py`: pure unit tests (injected
+  `measured_links`, no network) for the three rationale/warning
+  branches — data present, no alive worker measured yet, `/topology`
+  unreachable.
+
+**Honest scope, unchanged by this:** this is visibility, not a smarter
+decision yet. `decide_placement` still picks `pooled` purely on worker
+count/health, tolerant/intolerant, and multi-node — the real latency/
+bandwidth numbers are reported alongside the decision, not yet used to
+influence which target gets picked. Doing that for real would need
+measured data on how much latency/bandwidth actually costs a given
+workload, which this project doesn't have yet.

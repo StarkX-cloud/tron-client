@@ -411,6 +411,14 @@ function), and proven end-to-end in
 [tests/test_router_handoff.py](tests/test_router_handoff.py) with a real
 uvicorn-served master and a real worker cycle — not mocks.
 
+The pool-health signal also now uses real measured network data, not
+just worker count/memory: `queue_server.py` exposes a new `/topology`
+endpoint for the real latency/bandwidth numbers `tron/spine/topology.py`
+already tracks internally, and `query_pool_status` reads it — a "pooled"
+decision's rationale cites real averaged latency/bandwidth when workers
+have been measured, and warns honestly when none have (rather than
+silently pretending the numbers don't matter).
+
 ## Contributing / picking up a phase
 
 See [ROADMAP.md](ROADMAP.md) for the current phase breakdown. Phase 2

@@ -28,9 +28,11 @@ a local or same-machine process, not a real external fleet (see
 ROADMAP.md's distributed-training section, "no real second physical
 host"). A "pooled" recommendation here reflects that a live pool was
 found and looks usable by the signals available (worker count, reported
-memory, heartbeat freshness) -- it is not evidence that pooling real
-external, less-trusted machines works at any meaningful scale. That gap
-is inherited here, not closed by this module.
+memory, heartbeat freshness, and now real measured latency/bandwidth
+from ``queue_server.py``'s ``/topology`` endpoint when available) -- it
+is not evidence that pooling real external, less-trusted machines works
+at any meaningful scale. That gap is inherited here, not closed by this
+module.
 """
 
 from __future__ import annotations
@@ -61,6 +63,13 @@ class PoolStatus:
     total_reported_memory_gb: float = 0.0
     checked_worker_count: int = 0
     error: str | None = None
+    # Real latency_ms/bandwidth_mbps per alive worker, from queue_server.py's
+    # /topology endpoint -- the same measured numbers tron/spine/matcher.py
+    # already uses internally for placement (tron/spine/topology.py). None
+    # per-field means "never measured yet, or aged out" -- never fabricated.
+    # The whole dict is None (not {}) when /topology itself wasn't reachable
+    # or didn't exist, distinct from "reachable but nothing measured yet".
+    measured_links: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -70,6 +79,7 @@ class PoolStatus:
             "total_reported_memory_gb": self.total_reported_memory_gb,
             "checked_worker_count": self.checked_worker_count,
             "error": self.error,
+            "measured_links": self.measured_links,
         }
 
 
@@ -96,17 +106,35 @@ def query_pool_status(
         return PoolStatus(reachable=False, master_url=url, error=f"{type(exc).__name__}: {exc}")
 
     now = time.time()
-    alive = [
-        w for w in workers.values()
+    alive_names = [
+        name for name, w in workers.items()
         if isinstance(w, dict) and (now - w.get("last_heartbeat", 0)) <= staleness_seconds
     ]
+    alive = [workers[name] for name in alive_names]
     total_memory_gb = sum(w.get("memory_gb", 0) or 0 for w in alive)
+
+    # Best-effort: /topology is a real endpoint on this same master, but
+    # an older queue_server.py (or any other HTTP server answering the
+    # same /workers shape in a test) might not have it. Its absence
+    # doesn't make the pool unreachable -- /workers already answered --
+    # so a failure here leaves measured_links as None, not a crash.
+    measured_links = None
+    try:
+        topo_response = requests.get(f"{url}/topology", timeout=timeout_seconds)
+        topo_response.raise_for_status()
+        all_links = topo_response.json()
+        if isinstance(all_links, dict):
+            measured_links = {name: all_links.get(name) for name in alive_names if name in all_links}
+    except Exception:  # noqa: BLE001 - genuinely optional; /workers succeeding is what matters
+        measured_links = None
+
     return PoolStatus(
         reachable=True,
         master_url=url,
         alive_worker_count=len(alive),
         total_reported_memory_gb=total_memory_gb,
         checked_worker_count=len(workers),
+        measured_links=measured_links,
     )
 
 
@@ -222,6 +250,35 @@ def decide_placement(
         f"pool at {status.master_url} has {status.alive_worker_count} alive worker(s) "
         f"reporting {status.total_reported_memory_gb:.1f}GB total"
     )
+
+    if status.measured_links is None:
+        warnings.append(
+            "could not read real measured latency/bandwidth from the master's "
+            "/topology endpoint -- this pool-health check only has worker count "
+            "and self-reported memory to go on, not real network cost"
+        )
+    else:
+        measured = [v for v in status.measured_links.values() if v and v.get("latency_ms") is not None]
+        if not measured:
+            warnings.append(
+                "no alive worker has a real measured latency/bandwidth sample yet "
+                "(none have completed a heartbeat probe) -- the matcher will place "
+                "the first job to each of them blind to real network cost"
+            )
+        else:
+            avg_latency = sum(v["latency_ms"] for v in measured) / len(measured)
+            bw_values = [v["bandwidth_mbps"] for v in measured if v.get("bandwidth_mbps") is not None]
+            if bw_values:
+                avg_bw = sum(bw_values) / len(bw_values)
+                rationale.append(
+                    f"{len(measured)}/{status.alive_worker_count} alive worker(s) have real "
+                    f"measured network data: avg latency {avg_latency:.1f}ms, avg bandwidth {avg_bw:.1f}Mbps"
+                )
+            else:
+                rationale.append(
+                    f"{len(measured)}/{status.alive_worker_count} alive worker(s) have a real "
+                    f"measured latency sample (avg {avg_latency:.1f}ms) but no bandwidth sample yet"
+                )
 
     if not job.tolerant:
         warnings.append(

@@ -131,6 +131,64 @@ def test_single_alive_worker_is_low_confidence(monkeypatch):
     assert any("little to actually optimize" in w for w in decision.warnings)
 
 
+def test_pooled_decision_cites_real_measured_network_data_when_available(monkeypatch):
+    import importlib
+    recommend_module = importlib.import_module("tron_efficiency.advisor.recommend")
+
+    monkeypatch.setattr(recommend_module, "recommend", _fake_recommend(fits_without_offload=False))
+    pool_with_topology = PoolStatus(
+        reachable=True, master_url=DEFAULT_MASTER_URL,
+        alive_worker_count=2, total_reported_memory_gb=32.0, checked_worker_count=2,
+        measured_links={
+            "worker-a": {"latency_ms": 10.0, "bandwidth_mbps": 100.0},
+            "worker-b": {"latency_ms": 30.0, "bandwidth_mbps": 50.0},
+        },
+    )
+    decision = decide_placement(
+        JobRequest(model_name="fake/big-model"), hardware=_fake_hardware(), pool_status=pool_with_topology
+    )
+    assert decision.target == "pooled"
+    assert any("avg latency 20.0ms" in r and "avg bandwidth 75.0Mbps" in r for r in decision.rationale)
+    assert not any("could not read real measured" in w for w in decision.warnings)
+
+
+def test_pooled_decision_warns_when_no_worker_has_been_measured_yet(monkeypatch):
+    import importlib
+    recommend_module = importlib.import_module("tron_efficiency.advisor.recommend")
+
+    monkeypatch.setattr(recommend_module, "recommend", _fake_recommend(fits_without_offload=False))
+    pool_unmeasured = PoolStatus(
+        reachable=True, master_url=DEFAULT_MASTER_URL,
+        alive_worker_count=2, total_reported_memory_gb=32.0, checked_worker_count=2,
+        measured_links={
+            "worker-a": {"latency_ms": None, "bandwidth_mbps": None},
+            "worker-b": {"latency_ms": None, "bandwidth_mbps": None},
+        },
+    )
+    decision = decide_placement(
+        JobRequest(model_name="fake/big-model"), hardware=_fake_hardware(), pool_status=pool_unmeasured
+    )
+    assert decision.target == "pooled"
+    assert any("no alive worker has a real measured" in w for w in decision.warnings)
+
+
+def test_pooled_decision_warns_when_topology_endpoint_was_unreachable(monkeypatch):
+    import importlib
+    recommend_module = importlib.import_module("tron_efficiency.advisor.recommend")
+
+    monkeypatch.setattr(recommend_module, "recommend", _fake_recommend(fits_without_offload=False))
+    pool_no_topology = PoolStatus(
+        reachable=True, master_url=DEFAULT_MASTER_URL,
+        alive_worker_count=2, total_reported_memory_gb=32.0, checked_worker_count=2,
+        measured_links=None,
+    )
+    decision = decide_placement(
+        JobRequest(model_name="fake/big-model"), hardware=_fake_hardware(), pool_status=pool_no_topology
+    )
+    assert decision.target == "pooled"
+    assert any("could not read real measured" in w for w in decision.warnings)
+
+
 def test_requires_multi_node_skips_local_check_entirely(monkeypatch):
     import importlib
     recommend_module = importlib.import_module("tron_efficiency.advisor.recommend")
