@@ -419,6 +419,17 @@ decision's rationale cites real averaged latency/bandwidth when workers
 have been measured, and warns honestly when none have (rather than
 silently pretending the numbers don't matter).
 
+A previously-repeated claim in this project's own docs — "no retry/
+reliability handling if a pooled worker drops mid-job" — turned out to
+be wrong once actually tested: `queue_server.py`'s existing watchdog
+already requeues a dead worker's orphaned job via the spine's event
+log, and [tests/test_pool_reliability.py](tests/test_pool_reliability.py)
+proves it survives end-to-end through the real submission path — a
+real dead worker, a real requeue, a second real worker completing the
+same job, and the *original* `MagicFuture` resolving correctly. See
+[writeup/compute-routing-layer.md](writeup/compute-routing-layer.md)
+for what this does and doesn't prove.
+
 ## Contributing / picking up a phase
 
 See [ROADMAP.md](ROADMAP.md) for the current phase breakdown. Phase 2

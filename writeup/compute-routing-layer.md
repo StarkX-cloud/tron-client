@@ -127,12 +127,11 @@ over real HTTP):
    success.
 
 **Still honest scope, even after this:** `dedicated` is still just a
-flag, not a provisioning mechanism. There is still no retry/reliability
-handling if a pooled worker drops mid-job — a pooled job with no worker
-available to finish it just never completes; nothing here adds the
-reliability guarantee ROADMAP.md already names as missing for an
-unreliable or untrusted participant. Every worker exercised by this
-test is still this project's own machine, not a real external fleet.
+flag, not a provisioning mechanism. Every worker exercised by this test
+is still this project's own machine, not a real external fleet.
+**(The claim that used to sit here — "no retry/reliability handling if
+a pooled worker drops mid-job" — turned out to be wrong when actually
+checked; see "Dropped-worker reliability" below.)**
 
 ## Real network data: `/topology` and `measured_links`
 
@@ -185,3 +184,58 @@ bandwidth numbers are reported alongside the decision, not yet used to
 influence which target gets picked. Doing that for real would need
 measured data on how much latency/bandwidth actually costs a given
 workload, which this project doesn't have yet.
+
+## Dropped-worker reliability: a claim that was wrong until it was checked
+
+Several earlier sections of this document (and matching entries in
+ROADMAP.md) said, flatly: "no retry/reliability handling if a pooled
+worker drops mid-job — a pooled job with no worker to finish it just
+never completes." That statement was never actually tested against
+this project's own real submission path — it turns out to be false.
+
+`queue_server.py` already has `_watchdog_loop`: every 5 seconds it
+checks for a worker whose heartbeat has gone stale while it was marked
+`busy`, and for each one, asks the spine's content-addressed event log
+(`tron/spine/log.py`'s `recover_orphaned_tasks`) which jobs were last
+assigned to that now-dead worker but never reached `completed`/`failed`.
+Each orphaned job gets pushed back onto `job_queue` with its original
+`job_id` and its original `function` payload intact, ready for another
+worker's `/next_job` call to pick up.
+
+Nothing had ever driven this *end to end through the actual path this
+project uses to submit work* — `tron_router.handoff.submit_to_pool`'s
+real `/submit` → `/next_job` → `/complete` → `/status` mechanics (the
+same ones `@tron.remote` uses). `tests/test_pool_reliability.py` does,
+for real, in one pass:
+
+1. `submit_to_pool` a real function (`_multiply(6, 7)`) against a live
+   master.
+2. A real worker registers, claims the job via a real `/next_job` call
+   (the master marks it `busy`, the job moves into `running_jobs`) —
+   then goes completely silent. No heartbeat, no `/complete`. A real
+   dead worker, not a simulated one.
+3. The real watchdog thread (started manually in the test — it's
+   normally only started under `queue_server.py`'s own `__main__`
+   guard, which importing the ASGI app for a test server never
+   triggers) notices the stale heartbeat and requeues the job — proven
+   by polling the real `job_queue`/`job_store` state, not assumed.
+4. A second real worker calls `/next_job`, receives the *same*
+   `job_id` with its `function` payload still intact, actually
+   deserializes and calls it, and reports completion.
+5. The *original* `MagicFuture` returned by the first `submit_to_pool`
+   call — never recreated — resolves to the real result (`42`), having
+   survived the entire dead-worker-and-requeue cycle.
+
+This passed on its first real run.
+
+**What this does and does not prove:** it proves the requeue mechanism
+works for one dead worker, one job. It does **not** prove anything
+about: a worker that dies and is replaced repeatedly (there's no
+retry-count cap — a job whose every assigned worker dies in turn would
+requeue forever; a real, newly-identified gap, not fixed here); a
+worker that's hung but still heartbeating (the watchdog only catches a
+stale heartbeat, not a stuck-but-alive worker); or anything at real
+untrusted-fleet scale (the project's standing "no real second physical
+host" gap is unchanged by this). The honest lesson for future work on
+this repo: a limitation written down once and repeated in later entries
+without re-checking it can quietly go stale. This one did.

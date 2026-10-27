@@ -890,9 +890,9 @@ technical design behind each phase.
   **Honest scope:** this closes the "no automated test exercises the
   actual hand-off" gap the previous entry named, for the submission and
   execution mechanics specifically. It does not change `dedicated`'s
-  scope (still a flag, not a provisioning call) and does not add
-  retry/reliability handling for a pooled worker that drops mid-job —
-  that gap (no defense against an unreliable participant) is unchanged.
+  scope (still a flag, not a provisioning call). **(The "no retry/
+  reliability handling for a dropped worker" claim below turned out to
+  be wrong — see the next entry.)**
   Tests: 3 new in `tests/test_router_handoff.py`. 296 passing (was 293).
 
 - [x] **The pool-health signal now uses real measured network data, not
@@ -918,3 +918,39 @@ technical design behind each phase.
   measured data over real HTTP — not a mock), 3 new in
   `tests/test_router_decision.py` (pure unit tests of the rationale/
   warning logic via injected `measured_links`). 302 passing (was 296).
+
+- [x] **A repeated claim in this document turned out to be wrong, and
+  was checked for real instead of just restated.** Multiple earlier
+  entries said "no retry/reliability handling if a pooled worker drops
+  mid-job — a pooled job with no worker to finish it just never
+  completes." That was never actually tested; it turns out
+  `queue_server.py` already had a real mechanism for exactly this
+  (`_watchdog_loop`, using the spine's content-addressed event log —
+  `tron/spine/log.py`'s `recover_orphaned_tasks` — to detect a worker
+  whose heartbeat went stale while it held a job, and requeue that job
+  for another worker to pick up), but nothing had ever driven it
+  end-to-end through the actual submission path this project uses
+  (`tron_router.handoff.submit_to_pool` → `@tron.remote`'s same
+  `/submit`/`/next_job`/`/complete` mechanics). `tests/test_pool_reliability.py`
+  does, for real: submits a real function, has a real registered worker
+  claim it via `/next_job` and then simply go silent (no heartbeat, no
+  `/complete` — not simulated, an actual dead worker), waits for the
+  real watchdog thread to detect the staleness and requeue the job,
+  then has a second real worker pick up the *same* `job_id`, actually
+  run the real deserialized function, and complete it — with the
+  original caller's `MagicFuture` from the first submission still
+  resolving to the correct real result (`42`, from `_multiply(6, 7)`,
+  surviving the requeue intact). This passed on the first real run.
+  **What this does and does not prove:** it proves the requeue mechanism
+  works for one dead worker, one job, in this test's conditions. It does
+  *not* prove anything about a worker that dies and is replaced
+  repeatedly (no retry-count cap exists — a job whose every assigned
+  worker dies would requeue forever, which is itself worth noting as a
+  real gap, not fixed here), a worker that's hung-but-still-heartbeating
+  (the watchdog only catches a stale heartbeat, not a worker that's
+  alive but stuck), or anything at real-fleet scale with real untrusted
+  machines — ROADMAP's "no real second physical host" gap is unchanged.
+  Lesson for future sessions, stated honestly: a limitation written down
+  once and repeated in later entries without re-checking can be stale —
+  worth a real test before restating it again.
+  Tests: 1 new in `tests/test_pool_reliability.py`. 303 passing (was 302).
