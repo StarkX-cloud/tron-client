@@ -397,6 +397,20 @@ the full session, and `ROADMAP.md`'s entry for the honest scope: every
 worker tested here was this project's own machine, not a real external
 fleet, and `dedicated` is a flag, not a provisioning mechanism.
 
+`decide_placement` only ever decided; `tron_router.handoff.submit_to_pool`
+actually executes a `pooled` decision — it submits a real
+cloudpickle-serialized callable to the live master's `/submit`, the same
+path `@tron.remote` uses, and returns a `MagicFuture` to read the real
+result back once a worker runs it. Building this surfaced a real,
+previously undiscovered bug: `worker.py`'s `execute_job` was silently
+discarding every submitted job's function payload and returning a fake
+echoed "ok" instead of running it — meaning nothing ever submitted
+through `@tron.remote` or `tron_router` had actually executed anywhere.
+Fixed alongside this (`worker.py` now deserializes and calls the real
+function), and proven end-to-end in
+[tests/test_router_handoff.py](tests/test_router_handoff.py) with a real
+uvicorn-served master and a real worker cycle — not mocks.
+
 ## Contributing / picking up a phase
 
 See [ROADMAP.md](ROADMAP.md) for the current phase breakdown. Phase 2

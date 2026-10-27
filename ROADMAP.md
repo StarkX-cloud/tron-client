@@ -851,11 +851,46 @@ technical design behind each phase.
   gap, doesn't close it). The pool-health signal is coarse (worker count,
   reported memory, heartbeat freshness) — doesn't yet use the real
   measured bandwidth/latency `tron/spine/topology.py` already tracks
-  internally (not exposed via a public endpoint yet). No automated test
-  exercises the actual hand-off into the matcher's real job-submission
-  path after a `pooled` decision — this decides a job *should* go there,
-  doesn't yet verify the hand-off works end to end.
+  internally (not exposed via a public endpoint yet).
   Tests: 7 new in `tests/test_router_decision.py`, all via dependency
   injection (fake hardware, fake/injected pool status) — no network calls
   in the test suite itself, only in the separate manual live-verification
   session. 293 passing (was 286).
+
+- [x] **`tron_router/handoff.py` — actually executing a `pooled`
+  decision, not just deciding it.** `decide_placement` only ever
+  recommended; `submit_to_pool(job, decision, func, ...)` submits a real
+  cloudpickle-serialized `(func, args, kwargs)` to the live master's
+  `/submit` — the exact same path `@tron.remote` already uses
+  (`tron/serializer.py`, `tron/magic_future.py`) — and returns a
+  `MagicFuture` so the caller reads the real result back once a worker
+  executes it. Raises `HandoffError` if handed a non-`pooled` decision,
+  rather than silently re-deciding or falling back.
+  **Real bug found and fixed while building this, not before:**
+  `worker.py`'s `execute_job` was discarding every submitted job's
+  `function` payload entirely and returning a fake echoed `{"status":
+  "ok", "message": prompt}` instead of running it. Since `/submit`
+  rejects any job *without* a function payload, this meant **nothing**
+  ever submitted through `@tron.remote` or `tron_router` had actually
+  executed anywhere in this codebase before now — the "remote execution"
+  path looked complete (real job IDs, real status polling, a real
+  `MagicFuture.get()`) but the function itself was silently dropped on
+  the worker side. Fixed: `execute_job` now deserializes
+  `job["function"]` via `tron.serializer.deserialize` and calls it for
+  real, falling back to the old echo behavior only if no function
+  payload is present (defensive — in practice every queued job has one).
+  Verified end to end for real in `tests/test_router_handoff.py`: a real
+  `uvicorn`-served `queue_server.py` in a background thread (not
+  FastAPI's `TestClient` — `submit_to_pool` and `worker.py` both speak
+  real HTTP over a real socket), a real worker registration, a real
+  `/submit` → `/next_job` → execute → `/complete` → `/status` round trip
+  for both a successful function (`_add(3, 4) == 7`, deserialized and
+  actually computed, not echoed) and a deliberately-failing one
+  (surfaces as a real `{"status": "error", ...}` job result).
+  **Honest scope:** this closes the "no automated test exercises the
+  actual hand-off" gap the previous entry named, for the submission and
+  execution mechanics specifically. It does not change `dedicated`'s
+  scope (still a flag, not a provisioning call) and does not add
+  retry/reliability handling for a pooled worker that drops mid-job —
+  that gap (no defense against an unreliable participant) is unchanged.
+  Tests: 3 new in `tests/test_router_handoff.py`. 296 passing (was 293).

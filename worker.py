@@ -9,6 +9,8 @@ from pathlib import Path
 
 import requests
 
+from tron.serializer import deserialize
+
 # =========================
 # INTEGRATED TRON LAYERS
 # =========================
@@ -241,6 +243,23 @@ def report_complete(auth_token, job_id, result, runtime_seconds):
 
 
 def execute_job(job):
+    # Every job queue_server.py's /submit accepts carries a real
+    # cloudpickle-serialized (func, args, kwargs) in "function" --
+    # /submit rejects a submission without one. This was previously
+    # discarded entirely: this branch just echoed the prompt back as a
+    # fake "ok" result, so nothing @tron.remote or tron_router ever
+    # submitted actually ran anywhere. Deserialize and call it for real.
+    function_payload = job.get("function")
+    if function_payload:
+        try:
+            func, args, kwargs = deserialize(function_payload)
+            print(f"[WORKER] Executing job {job.get('id')} function={getattr(func, '__name__', repr(func))}")
+            result = func(*args, **kwargs)
+            return {"status": "ok", "result": result, "worker": WORKER_NAME}
+        except Exception as exc:
+            traceback.print_exc()
+            return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
     try:
         payload = job.get("payload", {}) or {}
         prompt = payload.get("prompt") or payload.get("message") or "TRON job"
