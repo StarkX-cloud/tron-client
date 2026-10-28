@@ -85,25 +85,41 @@ class PoolStatus:
 
 def query_pool_status(
     master_url: str | None = None,
-    timeout_seconds: float = 2.0,
+    timeout_seconds: float = 5.0,
     staleness_seconds: float = DEFAULT_WORKER_STALENESS_SECONDS,
+    retries: int = 1,
 ) -> PoolStatus:
     """Real HTTP query against a live ``queue_server.py`` instance's
     ``/workers`` endpoint. Never raises -- an unreachable master (nothing
     running, wrong URL, network error) is a real, expected case, reported
     as ``reachable=False`` with the actual error, not a crash.
+
+    ``timeout_seconds`` defaults to 5s (not the original 2s): proven too
+    tight against a real cross-region master under real WAN latency and
+    load -- a healthy pool intermittently came back ``reachable=False``
+    against a real two-Linode-node test (Newark master, Fremont worker,
+    ~130ms RTT), silently downgrading a correct "pooled" decision to
+    "dedicated". ``retries`` (default 1 extra attempt) covers a single
+    transient drop without masking a genuinely dead master -- it still
+    reports ``reachable=False`` honestly once every attempt fails.
     """
     import time
 
     import requests
 
     url = master_url or DEFAULT_MASTER_URL
-    try:
-        response = requests.get(f"{url.rstrip('/')}/workers", timeout=timeout_seconds)
-        response.raise_for_status()
-        workers = response.json()
-    except Exception as exc:  # noqa: BLE001 - any network/parse failure means "not reachable"
-        return PoolStatus(reachable=False, master_url=url, error=f"{type(exc).__name__}: {exc}")
+    workers = None
+    last_exc: Exception | None = None
+    for attempt in range(1 + max(0, retries)):
+        try:
+            response = requests.get(f"{url.rstrip('/')}/workers", timeout=timeout_seconds)
+            response.raise_for_status()
+            workers = response.json()
+            break
+        except Exception as exc:  # noqa: BLE001 - any network/parse failure means "not reachable" (for now)
+            last_exc = exc
+    if workers is None:
+        return PoolStatus(reachable=False, master_url=url, error=f"{type(last_exc).__name__}: {last_exc}")
 
     now = time.time()
     alive_names = [

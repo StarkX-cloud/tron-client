@@ -78,9 +78,21 @@ def _register_and_run_one_worker_cycle(master_url, tmp_path, monkeypatch):
     job = worker.fetch_next_job(auth_token)
     assert job is not None, "worker never received the submitted job from /next_job"
 
+    # Use job.get("id") the same way worker.py's real main() loop does
+    # (not job["id"] directly) -- this caught a real bug where main()
+    # read job.get("job_id") instead, which no job dict has ever had,
+    # so every job ever run through the real polling loop reported its
+    # completion to /complete/None and the master's /running entry for
+    # the real job never cleared. A prior version of this test called
+    # report_complete(auth_token, job["id"], ...) directly, which masked
+    # that bug completely -- found only by running a real job across two
+    # real separate machines end-to-end.
+    job_id = job.get("id")
+    assert job_id is not None, "job dict has no 'id' -- main()'s real extraction would silently fail"
+
     start = time.time()
     result = worker.execute_job(job)
-    worker.report_complete(auth_token, job["id"], result, time.time() - start)
+    worker.report_complete(auth_token, job_id, result, time.time() - start)
     return result
 
 

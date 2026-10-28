@@ -281,7 +281,21 @@ def main():
         try:
             job = fetch_next_job(auth_token)
             if job:
-                job_id = job.get("job_id")
+                # job["id"] is the real key queue_server.py uses everywhere
+                # (job_queue, running, /running's dict keys, _claim_job).
+                # This read "job_id" instead -- always None, since no job
+                # dict has ever had that key -- so every real job executed
+                # through this actual polling loop (as opposed to
+                # test_router_handoff.py's tests, which call execute_job
+                # and report_complete directly with the correct key,
+                # bypassing this line) reported completion to
+                # /complete/None instead of its real id. The master's
+                # /running entry for the real job never cleared, and
+                # the submitter's MagicFuture waited forever for a result
+                # that had already been computed and discarded. Found by
+                # running a real job across two real separate Linode
+                # nodes end-to-end -- no test exercised this exact line.
+                job_id = job.get("id")
                 start = time.time()
                 result = execute_job(job)
                 report_complete(auth_token, job_id, result, max(0.1, time.time() - start))
