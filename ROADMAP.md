@@ -844,14 +844,22 @@ technical design behind each phase.
   `local` without ever querying the pool. `tron_efficiency` and `tron`
   remain mutually independent — this package imports from both, neither
   is modified to depend on the other.
-  **Honest scope:** every "worker" tested here was this project's own
-  existing registration mechanism run locally — no real external/
-  untrusted fleet has ever been tested against this router or the matcher
-  it routes into (inherits the existing "no real second physical host"
-  gap, doesn't close it). The pool-health signal is coarse (worker count,
-  reported memory, heartbeat freshness) — doesn't yet use the real
-  measured bandwidth/latency `tron/spine/topology.py` already tracks
-  internally (not exposed via a public endpoint yet).
+  **Honest scope (updated 2026-10-28):** the "no real external fleet"
+  gap below this item described is now closed for the pooling path
+  specifically — see "Testing on a real external fleet" in
+  `writeup/compute-routing-layer.md`: two real Linode nodes in separate
+  data centers (Newark, Fremont), a real master and a real worker, a
+  real job submitted from a third machine and executed for real. That
+  test found and fixed two real bugs (a too-tight pool-reachability
+  timeout, and a `job_id` key bug that silently broke every real
+  job's completion report) that no same-machine or mocked test had
+  ever caught. It also found a real, unfixed constraint
+  (cross-Python-version cloudpickle closures don't deserialize) and an
+  unresolved anomaly in the dead-worker-on-real-infra path — both
+  documented there, not swept under "future work." The pool-health
+  signal now does use real measured bandwidth/latency (see
+  `tron/spine/topology.py`'s `/topology` endpoint, wired into
+  `query_pool_status` below).
   Tests: 7 new in `tests/test_router_decision.py`, all via dependency
   injection (fake hardware, fake/injected pool status) — no network calls
   in the test suite itself, only in the separate manual live-verification
@@ -971,3 +979,57 @@ technical design behind each phase.
   result on the third — not inferred from logs, read directly off
   `job_store`/`job_queue` state.
   Tests: 1 new in `tests/test_pool_reliability.py`. 304 passing (was 303).
+
+- [x] **Closed the "no real second physical host" gap for the pooling
+  path — the first time this project has ever run a real master and a
+  real worker on genuinely separate machines.** Two real Linode Nanode
+  1GB instances ($0.0075/hr each, ~cents for the session, torn down
+  immediately after) in separate data centers (Newark, Fremont). Real
+  measured network cost between them (136ms latency, ~15Mbps), a real
+  `pooled` decision, real job execution on the Fremont node from a
+  submission made on a third machine, real result back in 2.25s.
+  That one real test immediately found and fixed two real bugs no
+  same-machine or mocked test had ever caught:
+  (1) `query_pool_status`'s hardcoded 2.0s timeout was too tight
+  against real WAN latency and intermittently misreported a healthy
+  pool as unreachable (fixed: 5.0s default + 1 retry);
+  (2) `worker.py`'s real polling loop read the wrong dict key
+  (`job.get("job_id")` — no job has ever had that key, only `"id"`)
+  when reporting completion, so every job ever run through the actual
+  loop (not the test helper, which used the correct key directly and
+  masked this completely) reported to `/complete/None` and the
+  submitter's `MagicFuture` waited forever for an already-computed,
+  silently-discarded result.
+  **Also found, not fixed:** cross-Python-version cloudpickle closures
+  don't deserialize (`SystemError: error return without exception
+  set` submitting from 3.11 to a 3.12 worker) — a real constraint on
+  heterogeneous real fleets, not a bug with an obvious fix.
+  **Also found, not root-caused:** re-running the dead-worker-requeue
+  test across these same two real nodes (one real worker killed over
+  SSH mid-job) showed the watchdog correctly detecting the real dead
+  worker and the system not hanging, but two separate anomalies in the
+  actual job result (an instant "completion" of a job whose own logic
+  should have taken 25 real seconds; a `TypeError: 'module' object
+  does not support item assignment` on a second different
+  `__main__`-sourced closure deserialized by the same long-lived
+  worker process) — flagged honestly as open, not claimed as proven at
+  the same confidence as the pooling path.
+  **Added a first real execution guardrail**, closing the most acute
+  part of the "arbitrary remote code, no sandbox" gap: `worker.py`'s
+  `execute_job` now runs the deserialized function in a child process
+  (via `multiprocessing`'s `"fork"` context) with a real wall-clock
+  timeout (`TRON_JOB_TIMEOUT_SECONDS`, default 300s) and a real
+  address-space cap (`TRON_JOB_MEMORY_LIMIT_MB` via `RLIMIT_AS`,
+  default 2048MB) — verified for real on a Linode Linux node (a job
+  that hangs forever, a job that allocates past the limit, both killed
+  and reported as real errors instead of wedging the worker or OOMing
+  the host). This is a first layer, not a sandbox: no seccomp, no
+  container, no restricted filesystem/network access. Real multi-tenant
+  isolation is still open.
+  Full detail, including the honest "is this ready for AI companies to
+  use" assessment, in writeup/compute-routing-layer.md's "Testing on a
+  real external fleet" section.
+  Tests: 1 new in `tests/test_worker_job_guardrail.py` (skips on
+  platforms without a `fork` start method — proven on real Linux
+  hardware separately, not just locally). 304 passing locally (2 skip
+  on this Windows dev machine).

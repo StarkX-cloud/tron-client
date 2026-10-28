@@ -253,3 +253,112 @@ three real doomed workers in a row each claim and die on the same job,
 and the job is confirmed (by reading real `job_store`/`job_queue`
 state, not inferring it) to stop requeuing after the second real
 requeue and resolve to a real error on the third.
+
+## Testing on a real external fleet (2026-10-27/28)
+
+Every test above, including the dead-worker one, ran against workers
+on the *same machine* as the test process — this project's own
+standing "no real second physical host" gap, repeated in this file
+and `ROADMAP.md` for months. Closed it, cheaply: provisioned two real
+Linode Nanode 1GB instances ($0.0075/hr each) in genuinely separate
+data centers (Newark, Fremont), ran `queue_server.py` as the master on
+one and `worker.py` as a real worker on the other, and submitted a
+real job from a third machine (this dev box) through the actual
+`decide_placement` → `submit_to_pool` path. It worked: real measured
+network cost (136ms latency, ~15Mbps), a real `pooled` decision, real
+execution on the Fremont node, and the real result back in 2.25s.
+
+That one real test immediately surfaced two real bugs no mocked or
+same-machine test had ever caught:
+
+1. **`tron_router/decision.py`'s `query_pool_status` had a hardcoded
+   2.0s timeout** across two sequential HTTP calls. Against real
+   ~130ms WAN latency and a loaded single-vCPU master, this
+   intermittently misreported a perfectly healthy pool as unreachable,
+   silently downgrading a correct `pooled` decision to `dedicated`.
+   Fixed: default raised to 5.0s, plus one retry.
+2. **`worker.py`'s real polling loop read `job.get("job_id")`** to get
+   the id for `/complete` — no job dict has ever had that key
+   (`queue_server.py` uses `"id"` everywhere). Every job ever run
+   through the *actual* loop reported completion to `/complete/None`
+   instead of its real id, so the master's job never cleared and the
+   submitter's `MagicFuture` waited forever for a result that had
+   already been computed and silently discarded.
+   `tests/test_router_handoff.py`'s existing "end-to-end" test never
+   caught this because its helper called `report_complete(job["id"])`
+   directly, bypassing the buggy line entirely. Fixed, and the test
+   helper now uses `job.get("id")` the same way `main()` does, with an
+   assertion that would have caught the original bug.
+
+**A third, real, hard constraint found and documented rather than
+fixed:** submitting a cloudpickled closure from a Python 3.11 process
+to a worker running Python 3.12 fails with `SystemError: error return
+without exception set` — cloudpickle pickles raw bytecode for
+closures, which is not forward/backward compatible across CPython
+minor versions. Both test nodes were pinned to 3.11 to match the
+submitter for this session. This is not fixed and may not be cheaply
+fixable without changing how jobs are serialized (e.g. moving away
+from raw closures to importable, by-reference functions for anything
+crossing a real heterogeneous fleet) — real production use of a
+genuinely external pool needs either strict Python-version pinning
+across every worker, or a different submission mechanism.
+
+**A fourth anomaly, found but not root-caused:** testing the
+dead-worker-across-real-machines path (kill the real worker process
+over SSH mid-job, same assertions as the local test above, but with
+the master on one real node and two real workers, one in Fremont and
+one colocated with the master in Newark) showed the watchdog correctly
+detecting the real dead worker (it was marked `offline` automatically)
+and the system did not hang — the `MagicFuture` resolved rather than
+timing out. But two re-runs produced results inconsistent with the
+submitted job's own logic: a `slow_work(25)` closure that should block
+for a real 25 seconds instead completed in 0.009s per the real spine
+event log, and a separate run failed with `TypeError: 'module' object
+does not support item assignment` on the second of two different
+`__main__`-sourced closures deserialized in sequence by the same
+long-lived worker process. Neither was root-caused this session.
+Suspected cause for both: some interaction between cloudpickle's
+handling of functions whose `__module__` is `"__main__"` and a
+worker process that lives long enough to deserialize more than one
+such closure over its lifetime — plausible given a real worker pool is
+expected to run many jobs from many submitters over its life, but
+unconfirmed. **Practical workaround that did work:** defining the
+submitted function in a real importable module instead of a one-off
+script's own `__main__` scope. Flagging this honestly as an open
+finding rather than claiming the dead-worker path is proven at the
+same confidence level as the pooling path above — it is not, yet.
+
+**Security, addressed to a first layer, not solved:** every job
+submission ships arbitrary code (a cloudpickled closure) that a worker
+deserializes and runs with no sandbox — fine between processes one
+company owns, a real problem the moment a second party's worker runs a
+first party's job. Added a first real guardrail in `worker.py`:
+`execute_job` now runs the deserialized function in a child process
+(via `multiprocessing`'s `"fork"` context, Linux's default) with a
+real wall-clock timeout (`TRON_JOB_TIMEOUT_SECONDS`, default 300s) and
+a real address-space cap (`TRON_JOB_MEMORY_LIMIT_MB` via `RLIMIT_AS`,
+default 2048MB), killing and reporting a real error instead of hanging
+the worker forever or letting it OOM the host.
+`tests/test_worker_job_guardrail.py` proves both for real — a job that
+hangs forever, a job that allocates 500MB against a 100MB limit — and
+was verified passing on a real Linode Linux node (Windows has no
+`fork`, so worker.py falls back to the old unguarded behavior there
+with a one-time warning; this project's local dev happens on Windows
+but real workers run on Linux). **This is not a sandbox**: the job
+still has the same filesystem and network access as the worker process
+itself. No seccomp, no container, no restricted user, no network
+policy. Real multi-tenant isolation is still open work.
+
+**Honest bottom line on "is this ready for AI companies to use":**
+closer, not there. The core external-pooling mechanism is now proven
+on genuinely separate infrastructure, not just asserted. Two real bugs
+that would have broken production use were found and fixed because of
+that real test, not despite it. A first real resource guardrail
+exists and is verified on real Linux hardware. But: the
+cross-Python-version constraint is a real deployment requirement, not
+a nuisance; the dead-worker-on-real-infra path has an unresolved
+anomaly; and "a first layer" of execution safety is explicitly not the
+same as the sandboxing a genuine multi-tenant marketplace would need.
+Smaller teams running their own pool of machines they already trust
+are a much closer fit today than "any AI company can plug untrusted
+external workers into this."

@@ -436,6 +436,26 @@ test. See
 [writeup/compute-routing-layer.md](writeup/compute-routing-layer.md)
 for the full detail.
 
+**Tested on a real external fleet, for the first time (2026-10-28).**
+Every prior test above ran workers on this project's own machine. Ran
+a real master and a real worker on two separate Linode nodes in
+different data centers (Newark, Fremont) instead, and submitted a real
+job from a third machine — real measured network cost, real `pooled`
+decision, real execution, real result. That real test found and fixed
+two real bugs no same-machine test had caught (a too-tight pool-
+reachability timeout, and a wrong dict key that silently broke every
+real job's completion report), found a real unfixed constraint
+(cloudpickle closures don't survive a Python-version mismatch between
+submitter and worker), and left one anomaly in the dead-worker-on-
+real-infra path open and documented rather than claimed as solved.
+Also added a first real guardrail — a wall-clock timeout and memory
+cap around arbitrary submitted code, verified on real Linux hardware —
+closing the most acute part of the "no sandbox" gap, though not all of
+it. Full honest detail, including what this does and doesn't mean for
+real-world readiness, in
+[writeup/compute-routing-layer.md](writeup/compute-routing-layer.md)'s
+"Testing on a real external fleet" section.
+
 ## Contributing / picking up a phase
 
 See [ROADMAP.md](ROADMAP.md) for the current phase breakdown. Phase 2
