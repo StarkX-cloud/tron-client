@@ -1,4 +1,5 @@
 import hashlib
+import multiprocessing
 import os
 import time
 import uuid
@@ -10,6 +11,43 @@ from pathlib import Path
 import requests
 
 from tron.serializer import deserialize
+
+# A submitted job's "function" is arbitrary code -- /submit never
+# validates or sandboxes it, and execute_job previously ran it directly
+# in this process with no limit. A job that hangs (bug or malice) could
+# wedge this worker forever; one that leaks memory could OOM it. This
+# is a first real guardrail, not a sandbox: it bounds wall-clock time
+# and address-space size, but gives the job no less filesystem/network
+# access than this worker process already has. Real isolation (seccomp,
+# containers, a restricted user) is still open -- see ROADMAP.md.
+JOB_TIMEOUT_SECONDS = float(os.environ.get("TRON_JOB_TIMEOUT_SECONDS", "300"))
+JOB_MEMORY_LIMIT_MB = int(os.environ.get("TRON_JOB_MEMORY_LIMIT_MB", "2048"))
+
+
+_MP_CONTEXT = multiprocessing.get_context("fork") if "fork" in multiprocessing.get_all_start_methods() else None
+# "fork" (default on Linux, this project's real deployment target -- see
+# the Linode worker tests) duplicates this process's memory directly, so
+# an arbitrary cloudpickled closure never needs pickling a second time.
+# Windows has no "fork": its only start method ("spawn") re-pickles the
+# target with the standard pickle module, which cannot handle a local
+# closure (cloudpickle can, stdlib pickle can't) -- so on Windows this
+# guardrail is skipped and the job runs in-process, same as before this
+# change, with a one-time warning. Real workers run on Linux.
+_warned_no_subprocess_isolation = False
+
+
+def _run_job_in_subprocess(func, args, kwargs, result_queue):
+    try:
+        if JOB_MEMORY_LIMIT_MB > 0:
+            try:
+                import resource
+                limit_bytes = JOB_MEMORY_LIMIT_MB * 1024 * 1024
+                resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+            except Exception:
+                pass  # not available on this platform (e.g. Windows) -- time limit below still applies
+        result_queue.put(("ok", func(*args, **kwargs)))
+    except BaseException as exc:  # noqa: BLE001 - must report OOM/MemoryError too, not just Exception
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
 
 # =========================
 # INTEGRATED TRON LAYERS
@@ -254,8 +292,48 @@ def execute_job(job):
         try:
             func, args, kwargs = deserialize(function_payload)
             print(f"[WORKER] Executing job {job.get('id')} function={getattr(func, '__name__', repr(func))}")
-            result = func(*args, **kwargs)
-            return {"status": "ok", "result": result, "worker": WORKER_NAME}
+
+            global _warned_no_subprocess_isolation
+            if _MP_CONTEXT is None:
+                if not _warned_no_subprocess_isolation:
+                    print(
+                        "[WORKER] WARNING: no 'fork' start method on this platform -- "
+                        "running jobs in-process with no timeout/memory guardrail. "
+                        "Real workers should run on Linux."
+                    )
+                    _warned_no_subprocess_isolation = True
+                result = func(*args, **kwargs)
+                return {"status": "ok", "result": result, "worker": WORKER_NAME}
+
+            result_queue = _MP_CONTEXT.Queue()
+            proc = _MP_CONTEXT.Process(
+                target=_run_job_in_subprocess, args=(func, args, kwargs, result_queue)
+            )
+            proc.start()
+            proc.join(timeout=JOB_TIMEOUT_SECONDS)
+
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=5)
+                if proc.is_alive():
+                    proc.kill()
+                return {
+                    "status": "error",
+                    "error": f"TimeoutError: job exceeded TRON_JOB_TIMEOUT_SECONDS={JOB_TIMEOUT_SECONDS}s",
+                }
+
+            if result_queue.empty():
+                # Process died without reporting (e.g. OOM-killed by the
+                # kernel before RLIMIT_AS could catch it, or a segfault)
+                return {
+                    "status": "error",
+                    "error": f"job subprocess exited with code {proc.exitcode} and reported no result "
+                    "(likely killed by the kernel, e.g. OOM)",
+                }
+            status, payload = result_queue.get()
+            if status == "ok":
+                return {"status": "ok", "result": payload, "worker": WORKER_NAME}
+            return {"status": "error", "error": payload}
         except Exception as exc:
             traceback.print_exc()
             return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
