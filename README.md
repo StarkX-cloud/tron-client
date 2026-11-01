@@ -456,6 +456,49 @@ real-world readiness, in
 [writeup/compute-routing-layer.md](writeup/compute-routing-layer.md)'s
 "Testing on a real external fleet" section.
 
+## Cost trace (`tron_costtrace/`)
+
+A new, separate, standalone package — zero coupling to `tron/`,
+`tron_efficiency/`, or `tron_router/`. Those measure TRON's own local
+inference/training workloads; this measures a caller's real **production
+LLM API traffic**, because the actual target customer for a compute-
+efficiency product (AI application/agent companies) overwhelmingly spends
+money calling hosted model APIs, not running their own GPU fleet — and the
+headline number that matters to them is **cost per successful task**, not
+cost per token or per call, since a raw token-cost dashboard hides the real
+spend lost to retries and outright failures.
+
+```python
+from tron_costtrace import trace
+
+with trace("support_ticket_classify") as t:
+    resp = client.chat.completions.create(...)   # OpenAI- or Anthropic-shaped
+    t.record(resp)
+    t.mark_success(True)   # or let it default from whether an exception was raised
+```
+
+Each call appends one record to a local JSONL log (`TRON_COSTTRACE_PATH`,
+default `tron_costtrace_log.jsonl`) — no network egress, since this traces
+a caller's own usage and may touch sensitive business data. Cost is looked
+up from a pinned per-model $/1K-token table
+(`tron_costtrace/pricing.py`); a model missing from that table reports an
+explicit "unknown cost," never a silent $0. Report:
+
+```bash
+python -m tron_costtrace.cli report tron_costtrace_log.jsonl
+```
+
+produces a per-task breakdown: calls, successes, failures, cost per
+successful task, and the known cost of failed calls shown separately as
+overhead — the thing a plain token-cost number never surfaces. Deliberately
+does *not* do any routing or model-switching yet; this is pure observation,
+meant to produce one real finding (is there a cost gap worth acting on in a
+real workload's traffic) before anything automatic gets built on top of it.
+**Honest gap:** if a caller's own retry loop lives inside a single `trace()`
+block, only the final attempt's token usage is recorded — the report warns
+explicitly when `retry_count > 0` that the known cost may undercount true
+spend, rather than silently treating retries as free.
+
 ## Contributing / picking up a phase
 
 See [ROADMAP.md](ROADMAP.md) for the current phase breakdown. Phase 2

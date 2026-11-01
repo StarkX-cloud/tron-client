@@ -1033,3 +1033,38 @@ technical design behind each phase.
   platforms without a `fork` start method — proven on real Linux
   hardware separately, not just locally). 304 passing locally (2 skip
   on this Windows dev machine).
+
+- [x] **New, separate initiative: `tron_costtrace/` — request-level
+  cost/outcome recording for live LLM API traffic** (branch
+  `feat/cost-trace-recorder`). Preceded by a strategic audit mapping
+  TRON's existing capabilities against the broader "AI compute
+  efficiency" opportunity: the spine/matcher/pooling work and
+  `tron_efficiency`'s advisor are real and tested, but they measure
+  TRON's own local inference/training workloads, not what the
+  project's actual target customer (AI application/agent companies)
+  spends money on — hosted LLM API calls. This is the smallest concrete
+  step into that gap: a `trace()` context manager a caller wraps around
+  an existing OpenAI- or Anthropic-shaped SDK call, recording model,
+  token usage, latency, retries, and success/failure to a local JSONL
+  log (no network egress — this traces a caller's own, possibly
+  sensitive, usage). `tron_costtrace/report.py` computes **cost per
+  successful task** (not cost per call or per token) per task tag,
+  explicitly surfacing failed-call cost as overhead and warning when a
+  model's cost is unknown (missing from the pinned pricing table) or
+  when retries occurred inside a single traced call (only the final
+  attempt's usage is captured, so known cost is a floor, not exact, in
+  that case) — the same "state what wasn't measured" discipline
+  `tron_efficiency`'s reports use, reused in shape, not in code (the
+  workload here is live API traffic, not local model loading, so
+  nothing from that package's model-loading internals applies).
+  Deliberately does no routing or model-switching yet — pure
+  observation, meant to produce one real cost-per-successful-task
+  finding on real or representative traffic before any automatic
+  optimization gets built on top of it. 22 new tests
+  (`tests/test_costtrace_pricing.py`, `_store.py`, `_tracer.py`,
+  `_report.py`), 326 passing (was 304), full suite green.
+  **Honest gaps:** the pinned pricing table is a handful of common
+  OpenAI/Anthropic models snapshotted by hand, not a live price feed,
+  and will drift stale; no real customer or design-partner traffic has
+  been run through it yet — the next step is getting one real report
+  from real usage, not building a second feature.
