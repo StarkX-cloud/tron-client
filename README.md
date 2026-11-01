@@ -499,6 +499,20 @@ block, only the final attempt's token usage is recorded — the report warns
 explicitly when `retry_count > 0` that the known cost may undercount true
 spend, rather than silently treating retries as free.
 
+`examples/costtrace_demo/run_toy_agent.py` runs a small two-task toy agent
+through it — `--mock` (synthetic responses, no API key, runs today) or real
+mode against your own `OPENAI_API_KEY`:
+
+```bash
+python -m examples.costtrace_demo.run_toy_agent --mock
+```
+
+A mock run surfaces exactly the kind of thing this package exists to catch:
+e.g. a task whose failed calls alone cost real money for zero successful
+outcome — invisible to a plain per-call or per-token cost view. **This demo
+is synthetic data, not a real-world finding** — the real next step is
+running this against real or design-partner LLM traffic.
+
 ## Contributing / picking up a phase
 
 See [ROADMAP.md](ROADMAP.md) for the current phase breakdown. Phase 2
