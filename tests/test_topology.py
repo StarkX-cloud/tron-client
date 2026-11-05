@@ -125,3 +125,51 @@ def test_latency_and_bandwidth_are_independent_channels(topology):
     topology.record_bandwidth("master", "worker-1", 50.0)
     assert topology.latency("master", "worker-1") == 25.0
     assert topology.bandwidth("master", "worker-1") == 50.0
+
+
+# -- Memory: per-node, not per-link, but the same EWMA + age-out contract --
+
+
+def test_unmeasured_memory_is_none(topology):
+    assert topology.memory("worker-1") is None
+
+
+def test_record_and_read_memory(topology):
+    topology.record_memory("worker-1", 8.0)
+    assert topology.memory("worker-1") == 8.0
+
+
+def test_memory_is_per_node_not_per_pair(topology):
+    # Unlike latency/bandwidth, memory isn't a (from, to) link -- recording
+    # it for one node must not create or affect any other node's reading.
+    topology.record_memory("worker-1", 8.0)
+    assert topology.memory("worker-2") is None
+
+
+def test_memory_samples_smooth_via_ewma(topology):
+    topology.record_memory("worker-1", 8.0)
+    topology.record_memory("worker-1", 4.0)
+    assert topology.memory("worker-1") == pytest.approx(6.0)
+
+
+def test_memory_accepts_zero_as_a_real_reading(topology):
+    # Unlike bandwidth (where 0 implies a measurement bug — a completed
+    # transfer took nonzero time), a node can genuinely report zero free
+    # memory, and that's exactly the case this feature exists to catch.
+    topology.record_memory("worker-1", 0.0)
+    assert topology.memory("worker-1") == 0.0
+
+
+def test_memory_rejects_negative(topology):
+    with pytest.raises(ValueError):
+        topology.record_memory("worker-1", -1.0)
+
+
+def test_stale_memory_ages_out(topology):
+    topology.record_memory("worker-1", 8.0, timestamp=1000.0)
+    assert topology.memory("worker-1", now=1061.0) is None
+
+
+def test_fresh_memory_within_max_age(topology):
+    topology.record_memory("worker-1", 8.0, timestamp=1000.0)
+    assert topology.memory("worker-1", now=1059.0) == 8.0

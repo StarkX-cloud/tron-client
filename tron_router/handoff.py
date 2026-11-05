@@ -36,6 +36,7 @@ def submit_to_pool(
     min_memory_gb: float = 1.0,
     priority: int = 1,
     timeout_seconds: float = 10.0,
+    required_memory_gb: float | None = None,
 ) -> MagicFuture:
     """Hand a 'pooled' PlacementDecision off to the real job queue.
 
@@ -51,6 +52,13 @@ def submit_to_pool(
     Raises ``HandoffError`` if ``decision.target`` isn't ``"pooled"`` --
     this function executes a pooled decision, it does not re-decide
     placement or silently fall back to local/dedicated.
+
+    ``required_memory_gb`` defaults to ``decision.required_memory_gb`` (the
+    estimate ``decide_placement`` already computed from ``job.model_name``)
+    when not given explicitly -- passing it through is what lets
+    ``tron/spine/matcher.py``'s hard memory-fit filter actually act on this
+    job once it reaches the real matcher, instead of the decision having
+    been computed and then silently dropped on the way to ``/submit``.
     """
     if decision.target != "pooled":
         raise HandoffError(
@@ -60,6 +68,9 @@ def submit_to_pool(
             "real dedicated infrastructure, instead of calling this."
         )
 
+    if required_memory_gb is None:
+        required_memory_gb = decision.required_memory_gb
+
     url = (master_url or DEFAULT_MASTER_URL).rstrip("/")
     payload = serialize((func, func_args, func_kwargs or {}))
     submit_payload = {
@@ -68,6 +79,8 @@ def submit_to_pool(
         "min_memory_gb": min_memory_gb,
         "priority": priority,
     }
+    if required_memory_gb is not None:
+        submit_payload["required_memory_gb"] = required_memory_gb
 
     try:
         response = requests.post(f"{url}/submit", json=submit_payload, timeout=timeout_seconds)

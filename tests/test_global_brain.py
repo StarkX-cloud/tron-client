@@ -4,6 +4,7 @@ by measured topology instead of a flat pass-through.
 import pytest
 
 from tron.spine import TopologyMap
+from tron.spine.matcher import INFEASIBLE_SCORE
 from tron_runtime.global_brain import GlobalDecisionBrain
 
 
@@ -73,3 +74,23 @@ def test_zero_latency_makes_compute_weight_irrelevant(brain, topology):
     heavy = brain.decide([], {}, {"priority": 5, "compute_weight": 20}, worker_name="worker-1")
 
     assert light["score"] == heavy["score"] == 5.0
+
+
+def test_job_that_cannot_fit_this_worker_is_infeasible(brain):
+    # Unlike the outcome-quality term (deliberately NOT replicated here,
+    # per this module's docstring, because it's worker-only and can't
+    # change argmax), memory fit IS job-specific — it must be checked here
+    # too, not just in the matcher's cross-worker assignment.
+    workers = {"worker-1": {"memory_gb": 4}}
+    decision = brain.decide([], workers, {"priority": 5, "required_memory_gb": 16}, worker_name="worker-1")
+    assert decision["score"] == INFEASIBLE_SCORE
+
+
+def test_memory_fit_lets_this_worker_prefer_the_job_that_actually_fits(brain):
+    # The actual point of putting this in global_brain.decide() at all:
+    # given a fixed worker and two candidate jobs, the one that fits must
+    # win over the one that doesn't — argmax over jobs, not over workers.
+    workers = {"worker-1": {"memory_gb": 8}}
+    fits = brain.decide([], workers, {"priority": 5, "required_memory_gb": 4}, worker_name="worker-1")
+    too_big = brain.decide([], workers, {"priority": 5, "required_memory_gb": 32}, worker_name="worker-1")
+    assert fits["score"] > too_big["score"]

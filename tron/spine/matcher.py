@@ -72,6 +72,44 @@ def _outcome_quality_bonus(worker_name: str, outcome_log) -> float:
     return (quality - 0.5) * OUTCOME_QUALITY_WEIGHT
 
 
+def memory_fits(job: dict, worker_name: str, worker: dict, topology: TopologyMap) -> bool:
+    """Hard memory-fit check — unlike the latency/bandwidth terms below,
+    this is a feasibility gate, not a score adjustment: a job that doesn't
+    fit shouldn't just be ranked lower, it should never be placed there, the
+    same way `job.get("gpu") and not worker.get("gpu")` already works.
+
+    "Zero unless known," same contract as the other terms: a job that
+    doesn't declare `required_memory_gb` always passes (every pre-existing
+    placement decision is unaffected). Two independent real signals can
+    fail it:
+
+    - the worker's *registered total capacity* (`memory_gb`, reported at
+      registration — see queue_server.py's `/register_worker`) is less
+      than required: this node can never fit the job, regardless of what's
+      free right now.
+    - the worker's *live measured free memory* (`topology.memory`,
+      self-reported every heartbeat — see worker.py's
+      `measure_free_memory_gb`) is less than required: the node could fit
+      the job in principle but is too full right now. This check is
+      skipped (treated as passing) when nothing has been measured yet —
+      the same "don't penalize what hasn't been measured" rule latency and
+      bandwidth already follow.
+    """
+    required_gb = float(job.get("required_memory_gb", 0) or 0)
+    if required_gb <= 0:
+        return True
+
+    total_capacity_gb = worker.get("memory_gb")
+    if total_capacity_gb is not None and float(total_capacity_gb) < required_gb:
+        return False
+
+    free_gb = topology.memory(worker_name)
+    if free_gb is not None and free_gb < required_gb:
+        return False
+
+    return True
+
+
 def _transfer_penalty(job: dict, worker_name: str, topology: TopologyMap, master_node: str) -> float:
     """Estimated cost, in score points, of shipping this job's inputs to
     `worker_name` over the master->worker link. Zero — no effect on the
@@ -109,11 +147,17 @@ def score_pair(
             - transfer_seconds * BANDWIDTH_PENALTY_WEIGHT # input-shipping cost, Phase 2c
             + (node_quality - 0.5) * OUTCOME_QUALITY_WEIGHT # track record, closing the outcomes loop
 
+    unless `memory_fits` rules the pair out entirely, in which case this
+    returns INFEASIBLE_SCORE the same way a missing GPU does.
+
     `outcome_log` is optional (a tron.orchestrator.outcomes.OutcomeLog) —
     omit it and this scores exactly as it did before outcome feedback
     existed.
     """
     if job.get("gpu") and not worker.get("gpu"):
+        return INFEASIBLE_SCORE
+
+    if not memory_fits(job, worker_name, worker, topology):
         return INFEASIBLE_SCORE
 
     priority = float(job.get("priority", 1))

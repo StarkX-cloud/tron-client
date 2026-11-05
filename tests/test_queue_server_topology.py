@@ -267,6 +267,72 @@ def test_dead_worker_requeue_frees_the_load_shaper_budget(client):
     assert qs.load_shaper.inflight_bytes("slow") == 0
 
 
+def test_heartbeat_free_memory_is_recorded_in_topology_and_worker(client):
+    tc, qs = client
+    token = _register(tc, "worker-a")
+
+    resp = _heartbeat(tc, "worker-a", token, free_memory_gb=12.5)
+    assert resp.status_code == 200
+    assert qs.topology.memory("worker-a") == 12.5
+    assert qs.workers["worker-a"]["free_memory_gb"] == 12.5
+
+
+def test_heartbeat_zero_free_memory_is_recorded_not_ignored(client):
+    # Unlike bandwidth (0 implies a measurement bug), a genuinely full
+    # node reporting 0 free memory is exactly the real signal this exists
+    # to catch — it must not be silently dropped the way negative values are.
+    tc, qs = client
+    token = _register(tc, "worker-a")
+    _heartbeat(tc, "worker-a", token, free_memory_gb=0.0)
+    assert qs.topology.memory("worker-a") == 0.0
+
+
+def test_heartbeat_negative_free_memory_is_ignored_not_recorded(client):
+    tc, qs = client
+    token = _register(tc, "worker-a")
+    _heartbeat(tc, "worker-a", token, free_memory_gb=-1.0)
+    assert qs.topology.memory("worker-a") is None
+
+
+def test_topology_endpoint_reports_free_memory(client):
+    tc, _qs = client
+    token = _register(tc, "worker-a")
+    _register(tc, "worker-b")  # never heartbeats
+
+    _heartbeat(tc, "worker-a", token, free_memory_gb=6.0)
+
+    body = tc.get("/topology").json()
+    assert body["worker-a"]["free_memory_gb"] == 6.0
+    assert body["worker-b"]["free_memory_gb"] is None
+
+
+def test_match_cycle_never_places_a_job_on_a_worker_too_full_to_fit_it(client):
+    """End-to-end through the real server: two idle workers with the same
+    registered capacity, but one is currently much fuller than the other
+    (live free-memory reading) — a job declaring a real memory requirement
+    must go to the one that can actually fit it right now, not just the
+    one with more total capacity on paper.
+    """
+    tc, qs = client
+    tokens = {
+        "full": _register(tc, "full"),
+        "roomy": _register(tc, "roomy"),
+    }
+    # Equal registered total capacity for both — the only difference below
+    # is live free memory, so a correct placement can't come from the
+    # registered-capacity check alone.
+    qs.workers["full"]["memory_gb"] = 32
+    qs.workers["roomy"]["memory_gb"] = 32
+
+    _heartbeat(tc, "full", tokens["full"], latency_ms=10.0, free_memory_gb=2.0)
+    _heartbeat(tc, "roomy", tokens["roomy"], latency_ms=10.0, free_memory_gb=20.0)
+
+    tc.post("/submit", json={"function": "fn", "priority": 5, "required_memory_gb": 16})
+    qs._run_match_cycle()
+
+    assert set(qs.pending_assignment.keys()) == {"roomy"}
+
+
 def test_spine_events_recorded_for_submitted_job(client):
     tc, qs = client
     submit_resp = tc.post("/submit", json={"function": "dummy-fn-payload"})
