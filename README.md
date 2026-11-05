@@ -456,6 +456,55 @@ real-world readiness, in
 [writeup/compute-routing-layer.md](writeup/compute-routing-layer.md)'s
 "Testing on a real external fleet" section.
 
+## Memory-aware placement
+
+Two real, tested pieces of this project — the matcher's measured-network-
+aware placement (`tron/spine/matcher.py`) and the efficiency advisor's
+analytical memory-footprint estimator (`tron_efficiency/advisor/`) — had
+never been connected to each other. A job could be placed on a node with
+plenty of bandwidth and low latency that still didn't have enough free
+memory to run it. This closes that gap, reusing the existing bandwidth-
+probe and EWMA-smoothing patterns rather than inventing new machinery:
+
+- **Workers self-report real free memory every heartbeat** — GPU VRAM via
+  `nvidia-smi` if a GPU is present, else system RAM via `psutil`
+  (`worker.py`'s `measure_free_memory_gb`, mirroring `bandwidth_probe`'s
+  "a real measurement, not a hard-coded constant" rule). `psutil` isn't a
+  base dependency, so a worker without it just doesn't report memory —
+  same "zero/None unless measured" contract as latency/bandwidth before
+  they're ever measured.
+- **`tron/spine/topology.py` gains `record_memory`/`.memory()`** — per-node
+  (not per-link, unlike latency/bandwidth), same EWMA smoothing and
+  age-out as the existing signals.
+- **`tron/spine/matcher.py`'s `memory_fits` is a hard filter, not a soft
+  penalty** — a job declaring `required_memory_gb` is excluded entirely
+  from a worker whose registered total capacity or live measured free
+  memory can't fit it, the same way a GPU-required job already excludes
+  non-GPU workers. Wired into both the periodic match cycle and the
+  per-worker `/next_job` fallback (`tron_runtime/global_brain.py`) —
+  unlike the outcome-quality term, this one *is* job-specific, so it has
+  to live in both places to actually affect which job a worker gets.
+- **`tron_router`'s `decide_placement` auto-derives the requirement** —
+  `estimate_required_memory_gb` reuses the advisor's existing
+  `config.json`-only size estimator (no weight download) to compute a
+  `required_memory_gb` for a "pooled" decision, and `submit_to_pool`
+  forwards it through to the real `/submit` payload so the matcher
+  actually has something to check once the job reaches it.
+
+Nothing here claims to pool memory *across* nodes (that idea was tried
+once as `tron/gpu/cluster.py`'s `VirtualGPUCluster`, and its own docstring
+already calls it a simulation) — this only makes sure a job never lands
+somewhere that can't actually hold it. 37 new tests across
+`tests/test_topology.py`, `test_matcher.py`, `test_global_brain.py`,
+`test_queue_server_topology.py`, `test_worker_memory_probe.py`,
+`test_router_decision.py`, and `test_router_handoff.py` (the last two
+real, live-server tests, not mocks). **Honest gap:** the memory
+requirement is only as good as the advisor's analytical estimate (±5-10%
+for common architectures, per `model_info.py`'s own docstring) — this has
+not been validated against a real OOM-vs-fits experiment across a real
+heterogeneous multi-node pool the way the Linode pooling work was; that's
+the natural next validation step.
+
 ## Cost trace (`tron_costtrace/`)
 
 A new, separate, standalone package — zero coupling to `tron/`,

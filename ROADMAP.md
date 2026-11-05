@@ -1068,3 +1068,57 @@ technical design behind each phase.
   and will drift stale; no real customer or design-partner traffic has
   been run through it yet — the next step is getting one real report
   from real usage, not building a second feature.
+
+- [x] **Memory-aware placement — connecting the matcher's measured-network
+  awareness to the advisor's memory-footprint estimation for the first
+  time** (branch `feat/memory-aware-placement`). Preceded by a second
+  strategic audit, this time targeting infra operators/neoclouds rather
+  than the cost-trace work's app-layer customer: researched the current
+  landscape (vLLM/SGLang/LMCache solve single-node KV-cache memory well;
+  RunPod/Modal solve serverless cold-starts well; but Ray's own docs state
+  it doesn't consider memory usage when scheduling by default, and
+  SkyPilot's memory-aware scheduling is per-pool, not cross-cloud) and
+  concluded the real, confirmed gap is cross-node memory-aware placement —
+  which this project already had both missing halves of, never wired
+  together. Changes, reusing existing patterns rather than inventing new
+  ones:
+  - `worker.py`'s `measure_free_memory_gb` reports real free GPU VRAM
+    (`nvidia-smi`) or system RAM (`psutil`, optional) every heartbeat —
+    same "real measurement, not a hard-coded constant" rule as
+    `bandwidth_probe`.
+  - `tron/spine/topology.py` gains `record_memory`/`.memory()` — per-node
+    (not per-link), same EWMA + age-out machinery as latency/bandwidth.
+  - `tron/spine/matcher.py`'s new `memory_fits` is a **hard feasibility
+    filter**, not a score penalty — a job declaring `required_memory_gb`
+    is excluded from a worker whose registered capacity or live free
+    memory can't fit it, same pattern as the existing GPU-mismatch check.
+    Wired into `score_pair` (periodic match cycle) AND
+    `tron_runtime/global_brain.py`'s `decide()` (per-worker `/next_job`
+    fallback) — deliberately in both, unlike the outcome-quality term,
+    because memory fit is job-specific and therefore *can* change which
+    job a fixed worker is handed, the exact property that term's own
+    docstring says it lacks.
+  - `tron_router/decision.py`'s `estimate_required_memory_gb` reuses the
+    advisor's existing `config.json`-only size estimator to compute a
+    pooled job's memory requirement automatically; `PlacementDecision`
+    carries it, and `tron_router/handoff.submit_to_pool` forwards it to
+    the real `/submit` payload so it reaches the matcher, not just the
+    decision object.
+  - `queue_server.py`: `/submit` accepts `required_memory_gb` (distinct
+    from the pre-existing `memory_gb`/`min_memory_gb`, which is a soft
+    scheduling *weight*, not a correctness constraint); `/heartbeat`
+    records a worker's reported `free_memory_gb`; `/topology` reports it
+    per worker alongside latency/bandwidth.
+  37 new tests (`test_topology.py`, `test_matcher.py`, `test_global_brain.py`,
+  `test_queue_server_topology.py`, `test_worker_memory_probe.py`,
+  `test_router_decision.py`, `test_router_handoff.py` — the last two
+  including real live-uvicorn-server tests, not mocks), 363 passing (was
+  326), full suite green.
+  **Honest gaps:** the memory requirement is only as good as the
+  advisor's analytical parameter-count estimate (±5-10% for common
+  architectures, per `model_info.py`'s own docstring) — not validated
+  against a real multi-node OOM-vs-fits experiment the way the Linode
+  pooling work validated cross-node network placement; `tron/gpu/`'s
+  simulated vRAM *aggregation* (pooling memory across nodes, as opposed
+  to just checking fit on one node) remains an explicitly-labeled
+  simulation, untouched by this work and not attempted here.

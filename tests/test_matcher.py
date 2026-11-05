@@ -4,7 +4,7 @@ arbitration via optimal assignment, not per-worker argmax.
 import pytest
 
 from tron.spine import TopologyMap, match_jobs_to_workers, score_pair
-from tron.spine.matcher import INFEASIBLE_SCORE
+from tron.spine.matcher import INFEASIBLE_SCORE, memory_fits
 
 
 @pytest.fixture
@@ -57,6 +57,63 @@ def test_more_workers_than_jobs_leaves_some_idle(topology):
     workers = {"worker-1": {}, "worker-2": {}}
     assignments = match_jobs_to_workers(jobs, workers, topology)
     assert len(assignments) == 1
+
+
+# -- Memory-fit: a hard filter, not a soft penalty (see matcher.memory_fits) --
+
+
+def test_job_without_required_memory_always_fits(topology):
+    # "Zero unless known" — a job that never declares required_memory_gb
+    # must be unaffected by this feature entirely, on any worker.
+    assert memory_fits({}, "worker-1", {"memory_gb": 1}, topology) is True
+
+
+def test_job_fits_when_requirement_is_unmeasured_and_capacity_unknown(topology):
+    assert memory_fits({"required_memory_gb": 16}, "worker-1", {}, topology) is True
+
+
+def test_job_infeasible_when_registered_capacity_too_small(topology):
+    # Worker's total registered VRAM is below the requirement — this node
+    # can never fit the job, regardless of what's free right now.
+    worker = {"memory_gb": 4}
+    assert memory_fits({"required_memory_gb": 16}, "worker-1", worker, topology) is False
+
+
+def test_job_fits_when_registered_capacity_is_enough_and_nothing_live_measured(topology):
+    worker = {"memory_gb": 32}
+    assert memory_fits({"required_memory_gb": 16}, "worker-1", worker, topology) is True
+
+
+def test_job_infeasible_when_live_free_memory_too_low(topology):
+    # Enough total capacity, but the node is too full right now.
+    worker = {"memory_gb": 32}
+    topology.record_memory("worker-1", 2.0)
+    assert memory_fits({"required_memory_gb": 16}, "worker-1", worker, topology) is False
+
+
+def test_job_fits_when_live_free_memory_is_enough(topology):
+    worker = {"memory_gb": 32}
+    topology.record_memory("worker-1", 20.0)
+    assert memory_fits({"required_memory_gb": 16}, "worker-1", worker, topology) is True
+
+
+def test_score_pair_infeasible_for_memory_mismatch(topology):
+    worker = {"memory_gb": 4}
+    score = score_pair({"required_memory_gb": 16}, "worker-1", worker, topology)
+    assert score == INFEASIBLE_SCORE
+
+
+def test_match_never_places_job_on_a_worker_that_cannot_fit_it(topology):
+    jobs = [{"id": "big-model-job", "priority": 5, "required_memory_gb": 24}]
+    workers = {"small": {"memory_gb": 8}, "big": {"memory_gb": 32}}
+    assignments = match_jobs_to_workers(jobs, workers, topology)
+    assert assignments == [("big-model-job", "big")]
+
+
+def test_match_leaves_job_unassigned_when_no_worker_fits(topology):
+    jobs = [{"id": "huge-job", "priority": 5, "required_memory_gb": 100}]
+    workers = {"small": {"memory_gb": 8}, "medium": {"memory_gb": 16}}
+    assert match_jobs_to_workers(jobs, workers, topology) == []
 
 
 def test_optimal_assignment_beats_the_greedy_trap(topology):

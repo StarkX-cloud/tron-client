@@ -121,6 +121,39 @@ def detect_gpu():
     return gpu_available, gpu_name, vram_gb, cuda_cores
 
 
+def measure_free_memory_gb(gpu_available: bool) -> float | None:
+    """Real currently-available memory on this worker: free GPU VRAM via
+    `nvidia-smi` if a GPU is present, else free system RAM via `psutil`.
+    Mirrors `detect_gpu`'s nvidia-smi pattern and `bandwidth_probe`'s "a
+    real measurement, not a hard-coded constant" rule — this reports *free*
+    memory right now, not the static total capacity `detect_gpu` reports
+    once at registration. Returns None (not 0) when nothing could be
+    measured (no GPU and psutil isn't installed) — worker.py has no base
+    dependency on psutil (it's in requirements-training.txt, not
+    requirements.txt), so this degrades gracefully rather than crashing a
+    worker that doesn't have it. The master treats None/missing the same
+    way it treats latency/bandwidth before they're ever measured: no
+    effect on placement, not a penalty.
+    """
+    if gpu_available:
+        try:
+            output = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                text=True, timeout=5,
+            )
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            if lines:
+                return float(lines[0]) / 1024.0  # MiB -> GiB
+        except Exception:
+            pass  # fall through to RAM below
+
+    try:
+        import psutil
+        return psutil.virtual_memory().available / 1_000_000_000.0
+    except Exception:
+        return None
+
+
 def load_auth_token():
     if AUTH_TOKEN_FILE.exists():
         try:
@@ -225,13 +258,17 @@ def bandwidth_probe(auth_token):
         print(f"[WORKER] bandwidth up-probe failed: {exc}")
 
 
-def heartbeat(auth_token):
+def heartbeat(auth_token, gpu_available: bool = False):
     """Send a heartbeat, and report the round-trip time of the *previous*
     heartbeat call (plus the most recent bandwidth probe, if any) so the
     master can build up a real (not simulated) picture of this worker's
     network distance — see tron/spine/topology.py and
     tron_runtime/global_brain.py, which use this to prefer lower-latency,
-    fatter-pipe workers when scoring job placement.
+    fatter-pipe workers when scoring job placement. Also reports real
+    currently-free memory (see measure_free_memory_gb) every heartbeat —
+    unlike the bandwidth probe this is cheap (one nvidia-smi/psutil call,
+    no payload transfer), so it doesn't need the same every-Nth-heartbeat
+    throttling.
     """
     global _last_measured_latency_ms
     payload = {"worker_name": WORKER_NAME, "active_job_id": None}
@@ -241,6 +278,9 @@ def heartbeat(auth_token):
         payload["bandwidth_mbps_down"] = _last_measured_bw_down_mbps
     if _last_measured_bw_up_mbps is not None:
         payload["bandwidth_mbps_up"] = _last_measured_bw_up_mbps
+    free_memory_gb = measure_free_memory_gb(gpu_available)
+    if free_memory_gb is not None:
+        payload["free_memory_gb"] = free_memory_gb
 
     start = time.time()
     try:
@@ -352,6 +392,11 @@ def main():
     auth_token = load_auth_token()
     if not auth_token:
         auth_token = register_worker()
+    # detect_gpu() is also called inside register_worker(), but that result
+    # isn't threaded back out — cheap (one nvidia-smi subprocess call, same
+    # cost paid once already at registration) and simplest to call again
+    # here rather than change register_worker()'s return contract.
+    gpu_available, _, _, _ = detect_gpu()
 
     print(f"[WORKER] Starting polling loop for jobs on {TRON_MASTER_URL}")
     idle_ticks = 0
@@ -381,7 +426,7 @@ def main():
                 if idle_ticks % BANDWIDTH_PROBE_EVERY == 0:
                     bandwidth_probe(auth_token)
                 idle_ticks += 1
-                heartbeat(auth_token)
+                heartbeat(auth_token, gpu_available=gpu_available)
                 time.sleep(1)
         except KeyboardInterrupt:
             print("[WORKER] Shutting down")

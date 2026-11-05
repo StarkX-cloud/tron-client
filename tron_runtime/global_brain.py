@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Optional
 
 from tron.spine import TopologyMap
-from tron.spine.matcher import _transfer_penalty
+from tron.spine.matcher import INFEASIBLE_SCORE, _transfer_penalty, memory_fits
 
 
 class GlobalDecisionBrain:
@@ -36,6 +36,16 @@ class GlobalDecisionBrain:
 
         if worker_name is None:
             return {"score": base_score, "latency_ms": None}
+
+        # Unlike the outcome-quality term (worker-only, so it shifts every
+        # candidate job equally and can never change which one wins argmax
+        # — see this file's module docstring), memory fit is job-specific:
+        # a job that genuinely won't fit on this worker right now must lose
+        # to one that will, so this DOES need to live here, not just in the
+        # matcher's cross-worker assignment.
+        worker = workers.get(worker_name, {}) if isinstance(workers, dict) else {}
+        if not memory_fits(job, worker_name, worker, self.topology):
+            return {"score": INFEASIBLE_SCORE, "latency_ms": None}
 
         latency_ms = self.topology.latency("master", worker_name)
         if latency_ms is None:
