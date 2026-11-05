@@ -463,3 +463,608 @@ technical design behind each phase.
   said twice in the writeup on purpose), validated at real tower counts
   (4, not hundreds), and everything already listed above as not done for
   the underlying distributed-training machinery.
+- [x] **New, separate initiative: TRON Compute Efficiency Engine v0.1**
+  (`tron_efficiency/`) — not part of the distributed-training substrate
+  above, zero coupling to `queue_server.py`. Different question: can a
+  memory-constrained inference execution path run under a tighter memory
+  budget than a plain baseline, and what's the real performance cost?
+  Two real paths (`BaselinePolicy` vs. `OffloadPolicy`, the latter using
+  Hugging Face Accelerate's actual `device_map`/`max_memory`/
+  `offload_folder` mechanism, not a relabeled baseline), a benchmark
+  engine that flags output divergence across policies as a correctness
+  issue rather than reporting a timing "win," JSON/CSV/markdown report
+  output with per-metric winners and explicitly-labeled cost estimates, a
+  CLI, a standalone FastAPI app (`TRON_EFFICIENCY_PORT`, default 9100),
+  and a dashboard mounted the same way `/grid` is. See the README's
+  "Compute Efficiency Engine (v0.1)" section for usage.
+  **Real measured result** (`pythia-70m`, CPU, 32 tokens, 100MB CPU
+  budget vs. ~134MB model footprint —
+  `writeup/compute-efficiency-sample-report.md`): the constrained path is
+  **~5.8x slower end-to-end** (10.2s vs 1.8s; 3.1 vs 18.0 tok/s) with
+  only marginally lower peak memory (464MB vs 487MB) — a negative/mixed
+  result, reported honestly as one, not a TRON win.
+  **GPU validation follow-up (same day):** this dev machine has no CUDA,
+  so the GPU-budget code path (`OffloadPolicy` targeting
+  `max_memory={0: budget, ...}` when `device="cuda"`) was implemented per
+  spec but unexercised. Validated it for real against a free-tier NVIDIA
+  T4 (Google Colab) instead — see
+  `writeup/compute-efficiency-gpu-validation.md`. With a real, OS-enforced
+  1.2GB VRAM cap and `pythia-410m` (~1.64GB fp32), the baseline genuinely
+  fails (real `CUDA out of memory`) while the offload mechanism genuinely
+  succeeds under the identical cap, splitting the model across GPU/CPU —
+  **the spec's actual "critical experiment," confirmed on real hardware,
+  not simulated.** Took three iterations to get a valid setup: run 1 (600MB
+  cap, offload given the same 600MB as weight budget) OOM'd on *both*
+  policies, surfacing a real design gap — `OffloadPolicy` doesn't reserve
+  headroom for activations/CUDA context overhead, so a budget with no
+  margin fails even when the model would otherwise fit.
+  **Fixed (same day):** `resolve_max_memory`/`OffloadPolicy` now reserve
+  `gpu_activation_headroom_fraction` (default 0.6, constructor-overridable)
+  of the nominal `memory_budget_bytes` before handing the remainder to
+  accelerate as the GPU weight budget — more conservative than the ~58%
+  headroom that was empirically proven to work in the Run 3 validation
+  above. `CPU` path is deliberately untouched (no hard OS-level RAM cap in
+  this codebase to collide with, unlike `set_per_process_memory_fraction`
+  for VRAM). Covered by new unit tests in `tests/test_efficiency_memory_policy.py`
+  (`test_resolve_max_memory_on_cuda_reserves_activation_headroom`,
+  `test_resolve_max_memory_on_cuda_respects_custom_headroom_fraction`,
+  `test_offload_policy_describe_reflects_custom_headroom_fraction`). 221
+  passing (was 219).
+  **Re-verified on the real T4 (same day):** replayed Run 1's exact
+  failing scenario (600MB cap, `OffloadPolicy` given 600MB as
+  `memory_budget_bytes`, so the fix hands accelerate only 240MB as the
+  weight budget) — **it still OOMs**, identical error as before the fix.
+  Replaying the 1.2GB-cap scenario the fix was modeled on confirms real
+  headroom is what made *that* case succeed. Conclusion, precisely: the
+  fix does what it claims (stop handing accelerate a zero-margin weight
+  budget — that's why 1.2GB works), but it has a floor — when the *total*
+  nominal budget itself is below the fixed CUDA/framework overhead for a
+  given model+GPU, no re-proportioning of that budget can succeed. 600MB
+  is below that floor for `pythia-410m` on a T4; 1.2GB is above it. This
+  is not "every budget now works," and is documented as such rather than
+  letting the 1.2GB success stand in for more than it showed. Full numbers
+  (both the re-verification failure and the original success) in
+  `writeup/compute-efficiency-gpu-validation.md`'s "Re-verifying the fix"
+  section.
+  **Real installed package run end-to-end on GPU (same day, closes a
+  previously-open gap):** `feat/compute-efficiency-engine` pushed to
+  GitHub, cloned into a fresh Colab T4, installed via
+  `requirements-training.txt`, run through its own CLI — not a mirrored
+  script. `recommend --model EleutherAI/pythia-1.4b` correctly judged this
+  bigger, more commercially-relevant model (1.4B params vs. the
+  70M/410M used so far) fits on a full T4 without offload; `compare
+  --memory-budget-mb 1500` forced the offload path too, for a genuine
+  baseline-vs-offload run at this scale: baseline 48.42 tok/s at ~2.65GB
+  VRAM, offload 1.585 tok/s (~30.5x slower) at ~586MB VRAM (~4.8x less
+  memory — the clearest real memory win so far, paired honestly with its
+  throughput cost). Offload's measured peak GPU memory (586MB) landed
+  almost exactly on the headroom fix's computed weight budget
+  (`1500MB * 0.4 = 600MB`), confirming the fix works correctly in the real
+  package, not just the standalone script. Output correctness held (no
+  divergence between policies).
+  **New gap found by this run:** `BaselinePolicy` doesn't pass
+  `torch_dtype` to `from_pretrained` — it loads whatever dtype the
+  checkpoint is stored in on the Hub. `pythia-1.4b`'s checkpoint happens to
+  be fp16 (confirmed via download size: 2.93GB, matching fp16's ~2.83GB
+  estimate not fp32's ~5.66GB), which is why the advisor's fp16 estimate
+  landed within 0.6% of the measured peak — a coincidence of this
+  checkpoint's storage format, not because `recommend()`'s dtype choice is
+  actually wired into how `BaselinePolicy` loads a model. A model stored in
+  fp32 would silently load fp32 regardless of what was recommended.
+  **Not yet done at the time, both addressed in later entries below:**
+  - ~~The dtype-wiring gap just found~~ — fixed in the "Real quantized
+    loading" entry below.
+  - ~~`OffloadPolicy` has no viable-budget floor check~~ — addressed (not
+    with a numeric floor, deliberately — see the "Clarify confusing
+    underlying errors" entry below for why) in a later entry.
+  - Single model family tested per environment (`pythia-70m` CPU,
+    `pythia-410m` the one GPU run); no sweep across model sizes/budgets
+    yet (the engine supports it, the CLI doesn't expose a sweep flag).
+  - Peak CPU memory is a 50ms-interval polling-thread approximation, not
+    a true OS peak-RSS reading (no portable equivalent on Windows).
+  - On this specific CPU-only dev machine, `pythia-70m`'s ~134MB footprint
+    fits trivially in RAM regardless of a nominal CPU budget, so the
+    baseline-fails/offload-succeeds result could not be reproduced
+    *locally* — only on the GPU run above.
+  Tests: `tests/test_efficiency_hardware.py`,
+  `tests/test_efficiency_results.py`,
+  `tests/test_efficiency_memory_policy.py`, `tests/test_efficiency_api.py`
+  (22 fast unit/API tests, no model load) plus
+  `tests/test_efficiency_workload_real.py` (3 real-model tests against
+  `pythia-70m` on CPU — gated behind `TRON_EFFICIENCY_RUN_MODEL_TESTS=1`,
+  kept out of the default suite the same way
+  `tron/training/benchmark_lora.py`'s ~20-minute real run is). 219
+  passing in the default suite (was 197) — nothing under `tron/` touched.
+- [x] **Automatic policy selection — `tron_efficiency/advisor/`** (same
+  day). The product layer on top of the raw mechanism: instead of a human
+  hand-picking `memory_budget_bytes`, `recommend(model_name, hardware)`
+  fetches the model's `config.json` (not its weights — no multi-GB
+  download) and analytically estimates its real parameter count from the
+  architecture's shape, then picks a device/dtype/policy and, for
+  `OffloadPolicy`, the nominal budget to pass it. The param-count formula
+  is validated to within 0.04% against `pythia-70m`'s real measured size
+  (70,398,464 estimated vs. 70,426,624 real, confirmed directly against
+  the loaded model). Confidence (`high`/`medium`/`low`) and warnings are
+  explicitly calibrated against the only two real GPU data points this
+  project has — the 600MB-fails / 1.2GB-works pair from the GPU
+  validation above — never reported as higher confidence than one real
+  measurement earns. CLI (`recommend --model <name>`), API
+  (`GET /recommend`), and dashboard form all wired in.
+  **Known gap, stated in every relevant recommendation:** the advisor can
+  recommend `int8`/`int4` when that's what makes a model fit, but
+  `BaselinePolicy`/`OffloadPolicy` don't implement quantized loading yet
+  (no `bitsandbytes`/`load_in_8bit` wiring) — such a recommendation is
+  explicitly flagged as advisory, not executable via `run_workload` as it
+  stands. Implementing real quantized loading is the natural next step —
+  it's also the other major lever (alongside offload) for the actual
+  commercial pitch (cheaper hardware per model served).
+  **Other not-yet-done:** no handling for architectures the analytical
+  formula can't estimate (returns `param_count=0`, falls back to the
+  safest CPU recommendation rather than guessing); the CPU-side viable-
+  budget logic uses a flat 1.5x safety margin, not anything empirically
+  tuned the way the GPU thresholds are (no CPU equivalent of the
+  600MB/1.2GB data points exists yet).
+  Tests: `tests/test_efficiency_advisor.py` (11 cases — formula accuracy
+  against a real pinned architecture, CPU/GPU branch coverage, confidence
+  calibration at and around both confirmed data points, the quantization-
+  executability warning) plus `tests/test_efficiency_api.py`'s
+  `test_recommend_endpoint`. 233 passing (was 221).
+- [x] **Real quantized loading (`int8`/`int4` via bitsandbytes) — closes
+  the gap the advisor entry above flagged** (same day).
+  `WorkloadConfig.dtype` now flows into an actual `torch_dtype=`/
+  `quantization_config=` argument in both `BaselinePolicy` and
+  `OffloadPolicy` (`memory/policies.py`'s `_loading_kwargs_for_dtype`) —
+  not advisory, real `BitsAndBytesConfig(load_in_8bit=True)` /
+  `load_in_4bit=True`, the same mechanism any `transformers` user has.
+  `dtype=None` (the default) preserves the exact old behavior (no kwargs
+  added at all) for backward compatibility. Verified locally, end to end,
+  on real CPU hardware (no GPU needed for this part): `pythia-70m` loads
+  and generates correctly as real int8 and int4 quantized weights via
+  `run_workload`.
+  **Real bitsandbytes constraint, surfaced honestly rather than hidden:**
+  4-bit quantization cannot combine with device-map offload (only 8-bit
+  has the `llm_int8_enable_fp32_cpu_offload` escape hatch) —
+  `recommend()` now always picks `int8`, never `int4`, when it needs to
+  recommend the offload policy, and `OffloadPolicy` itself raises a clear
+  `UnsupportedDtypeCombination` (caught the same way `run_workload`
+  already catches `ImportError`) if asked for int4+offload anyway, rather
+  than failing confusingly deep inside `from_pretrained`. Verified: the
+  rejection fires with the intended message, and real int8+offload
+  succeeds at a large enough CPU budget.
+  **Also fixes the dtype-wiring gap found during the real-GPU-package
+  run** (`pythia-1.4b` loading fp16 only by checkpoint-storage
+  coincidence, not because anything requested it) — `BaselinePolicy`/
+  `OffloadPolicy` now actually honor an explicit `dtype`, closing that gap
+  too, not just the quantization one.
+  **New gap found while testing this, more fragile than first thought:**
+  `int8` quantization combined with `OffloadPolicy` on CPU-only hardware
+  behaves inconsistently across budgets. Probed `pythia-70m` at six CPU
+  budgets: 100MB fails with accelerate's "whole model to disk" refusal
+  (the same error unquantized offload gives below its own viable floor);
+  110MB and 120MB fail with a *different* error —
+  `RuntimeError: Cannot access accelerator device when none is
+  available` — a CUDA-shaped failure on a machine with no CUDA at all;
+  130MB, 150MB, 200MB, 250MB all report success. The 110-120MB failure
+  mode specifically suggests bitsandbytes' `llm_int8_enable_fp32_cpu_offload`
+  escape hatch may internally assume a reachable CUDA accelerator even
+  when only splitting between CPU and disk — plausibly a real quirk of a
+  CUDA-oriented library used in a CPU-only configuration, not something
+  this project introduced. The "successes" above could not be confirmed
+  as genuine disk-split placement either way: `model.hf_device_map` isn't
+  populated the same way for quantized models as it is for plain-dtype
+  offload, so the usual placement evidence this project relies on
+  elsewhere isn't available here. Properly characterizing this needs a
+  real GPU, not more CPU-only guessing — flagged for the next GPU
+  session, deliberately not resolved here.
+  Tests: 8 new cases in `tests/test_efficiency_memory_policy.py`
+  (`_loading_kwargs_for_dtype`/`_requires_device_map` behavior for every
+  dtype, the int4+offload rejection, backward-compat of `dtype=None`)
+  plus 2 updated in `tests/test_efficiency_advisor.py`
+  (`test_recommend_picks_quantized_dtype_without_unsupported_warning`,
+  `test_recommend_never_pairs_int4_with_offload`). `bitsandbytes` added
+  to `requirements-training.txt`.
+- [x] **Clarify confusing underlying errors instead of inventing a
+  numeric budget floor** (same day). `OffloadPolicy`'s "no viable-budget
+  floor check" gap, flagged repeatedly above, can't honestly be closed
+  with a hard-coded minimum byte threshold — the real floor is
+  device/model-dependent and this project only has two confirmed real
+  data points loosely bounding it (600MB fails, 1.2GB works, for one
+  model+GPU pair). A universal number would be exactly the kind of
+  unearned confidence this project has been deliberately avoiding.
+  Instead: `_clarify_error()` in `workloads/runner.py` recognizes three
+  known-confusing failure patterns already hit for real during
+  development and rewrites them into actionable messages that cite what
+  was actually measured, while preserving the original error text:
+  accelerate's "offload the whole model to the disk" refusal (explains
+  the real cause and the fix: raise the budget); the CUDA-shaped
+  "Cannot access accelerator device when none is available" error found
+  testing int8+offload on CPU-only hardware (names the known quirk,
+  points at this file's entry above instead of looking unrelated); CUDA
+  OOM specifically under `OffloadPolicy` on a CUDA device (cites the two
+  real confirmed data points, scoped so a baseline OOM doesn't get a
+  misleading citation). Everything else passes through unchanged — this
+  clarifies known patterns, it doesn't mask unknown ones. Verified
+  against a real failure (the 110MB int8+offload CPU case) that the
+  clarified message actually appears instead of the raw error.
+  Tests: 6 new cases in `tests/test_efficiency_error_clarity.py`.
+  248 passing (was 242).
+- [x] **Budget sweep — real tradeoff curve instead of isolated two-point
+  comparisons** (same day). `benchmarks/engine.py`'s `run_budget_sweep`
+  runs the same workload once per memory budget (plus one unconstrained
+  baseline), producing one `BenchmarkResult` per budget — each an
+  independent real measurement, nothing interpolated between points.
+  `results/report.py`'s `generate_sweep_report` labels rows by budget
+  (`offload @ 100MB`, not just `offload` colliding across every budget
+  the way `generate_report`'s column-per-policy-name layout would).
+  Wired into `cli.py` (`sweep --memory-budget-mb-list 100,150,250`),
+  `api/app.py` (`POST /sweep`), and a dashboard form.
+  **Real example run** (`pythia-70m`, CPU, 3 budgets — full numbers in
+  `writeup/compute-efficiency-budget-sweep-example.md`): throughput holds
+  essentially flat (~33 tok/s) from 150MB to 250MB, matching baseline,
+  then hits a real cliff at 100MB — **8.6x throughput collapse** (32.7 →
+  3.8 tok/s) for only an **8.6% memory saving** (490MB → 448MB). This is
+  the same "doesn't degrade gracefully, falls off a cliff" shape the
+  bigger GPU result (1.4B params on a T4) showed, now demonstrated with
+  three real points on one curve instead of two isolated numbers from
+  different sessions.
+  **Honest scope:** sweeping *model sizes* automatically is still not
+  built — each model is its own multi-GB download with its own real
+  cost, left as an explicit per-model decision rather than something
+  this project downloads on your behalf. One run per budget point (no
+  repeated trials for variance) — good enough to show the cliff shape is
+  real, not a statistically rigorous curve.
+  Tests: 5 new cases in `tests/test_efficiency_benchmarks_engine.py`
+  (baseline inclusion, budget ordering, headroom-fraction passthrough,
+  correctness-divergence check still firing across a sweep), 6 new in
+  `tests/test_efficiency_results.py` (sweep report row labeling/ordering/
+  edge cases), 2 new in `tests/test_efficiency_api.py` (`/sweep`
+  endpoint, with and without baseline). 260 passing (was 248).
+- [x] **Dtype sweep — measures quantization's real cost/benefit, which
+  the "real quantized loading" entry above confirmed works but never
+  benchmarked** (same day). `benchmarks/engine.py`'s `run_dtype_sweep`
+  runs `BaselinePolicy` once per dtype; deliberately does *not* reuse
+  `run_suite`'s output-correctness check (divergent text across dtypes is
+  expected — quantization is lossy by design — not a bug the way policy
+  divergence would be). `results/report.py`'s `generate_dtype_sweep_report`
+  labels rows by dtype and reports the generated text per dtype as a
+  factual note, never framed as a warning. Wired into `cli.py`
+  (`dtype-sweep --dtypes fp32,fp16,int8,int4`), `api/app.py`
+  (`POST /dtype-sweep`), and a dashboard form.
+  **Real result** (`pythia-70m`, CPU — full numbers in
+  `writeup/compute-efficiency-dtype-sweep-example.md`): peak memory drops
+  monotonically and genuinely with precision (804MB fp32 → 589MB int4, a
+  real 27% reduction) — the win quantization is supposed to deliver, and
+  it's real here. **But throughput does not drop monotonically**: int8 is
+  **2.6x slower than fp32** (6.03 vs. 15.45 tok/s), worse than both fp32
+  and fp16, with int4 landing in between. Hypothesis, not yet confirmed:
+  bitsandbytes' CPU kernels aren't necessarily as optimized as native
+  PyTorch fp32/fp16 ops — the GPU story (where tensor cores typically make
+  int8 faster, not just smaller) may well be different, but this project
+  hasn't measured that yet. "Quantize for a speed win" turned out to be
+  conditional on hardware, not universal — worth knowing before claiming
+  it, which is exactly why this got measured instead of assumed.
+  Also fixed in passing: `_loading_kwargs_for_dtype` used `torch_dtype=`,
+  which `transformers` (5.16.1, the version this was developed against)
+  flags as deprecated in favor of `dtype=` — switched to the current
+  kwarg, confirmed no deprecation warning fires anymore.
+  **Honest gaps:** one small model, one CPU machine, one run per dtype
+  (no repeated trials); no automated output-quality metric (perplexity,
+  task accuracy) to quantify how much int4's visibly-more-different
+  output actually degrades quality beyond eyeballing it; the GPU-side
+  version of this sweep (does int8 actually deliver its expected speed
+  win there) is a natural next step, not yet run.
+  Tests: 3 new in `tests/test_efficiency_benchmarks_engine.py`, 6 new in
+  `tests/test_efficiency_results.py`, 1 new in `tests/test_efficiency_api.py`.
+  270 passing (was 260).
+- [x] **Feed the dtype sweep's finding back into the advisor** (same day).
+  Before this, `advisor/recommend.py`'s `CPU_DTYPE_CANDIDATES` was just
+  `["fp32", "fp16"]` — the CPU branch never recommended quantization at
+  all, and separately carried no awareness of the dtype-sweep result above
+  (that int8 measured *slower* than fp32 on CPU, not faster). Fixed both:
+  `CPU_DTYPE_CANDIDATES` now includes `int8`/`int4` as fallback options
+  when `fp32`/`fp16` don't fit in available RAM, and whenever a CPU
+  recommendation lands on a quantized dtype it carries
+  `CPU_QUANTIZED_DTYPE_WARNING`, citing the exact measured number (int8
+  2.6x slower, 6.03 vs 15.45 tok/s) — so quantization is only ever reached
+  for *memory*, never silently implied to also be faster, and confidence
+  drops to `low` for that case to reflect it's a real tradeoff, not a
+  clean win. This is the same "outcomes feed back into the decision
+  layer" pattern the original TRON-II work used (see
+  [[tron-gap-bridging]] in project memory) — a layer's job isn't done
+  once it ships, it should keep learning from what gets measured under it.
+  Tests: 3 new in `tests/test_efficiency_advisor.py` (CPU falls back to
+  quantized when fp32/fp16 don't fit, the warning is attached with the
+  real measured number, non-quantized recommendations carry no such
+  warning). 273 passing (was 270).
+- [x] **Matrix sweep (dtype x budget) — found a real segfault, fixed it
+  by containment** (same day). `run_matrix_sweep` crosses both sweep axes
+  for `OffloadPolicy` in one pass, built specifically to properly
+  characterize the int8+offload CPU quirk above instead of probing one
+  budget at a time by hand. It found something more serious: a **real,
+  reproducible segfault** in `OffloadPolicy` itself, confirmed twice
+  independently (`pythia-70m`, CPU, 130MB budget, exit code 139 both
+  times) — full story in
+  `writeup/compute-efficiency-matrix-sweep-crash.md`. A segfault happens
+  below the Python interpreter and categorically cannot be caught by
+  `run_workload`'s `except Exception`; before this was found, hitting it
+  during a sweep would silently kill the whole process and lose every
+  result already collected, not just fail one cell.
+  **Fixed by containment, not a cure** (the crash itself is not root-
+  caused or explained): `tron_efficiency/workloads/isolated_runner.py`
+  runs each config in a `multiprocessing` (`spawn`) subprocess; a crash
+  shows up as a nonzero exit code the parent detects and reports as a
+  normal failed `RunOutcome`, so the sweep continues instead of dying. A
+  hang is bounded by a timeout (default 600s) instead of blocking
+  forever. Wired in as `--isolated`/`--no-isolated` on all three sweep
+  commands (on by default; off trades the safety for speed, since
+  isolation means paying a full Python/torch import cost per run).
+  **Honest complication:** re-running the identical crashing scenario
+  *through* isolation did not crash either time — this does not mean the
+  bug is fixed; it was independently reproduced twice outside isolation,
+  and the non-crash under isolation is equally explainable by
+  non-determinism or by `spawn`'s cleaner per-process state incidentally
+  avoiding the trigger. What *is* proven deterministically, independent
+  of whether the real crash reproduces on any given run: the containment
+  mechanism itself. `tests/test_efficiency_isolated_runner.py` verifies
+  crash/timeout/success handling against small functions that
+  crash/hang/succeed on purpose (`os._exit(1)`, `time.sleep()` past a
+  timeout, a normal return), not by hoping the flaky real trigger fires
+  on schedule.
+  **Not yet done:** the segfault itself remains un-root-caused (likely
+  somewhere in accelerate's disk-offload/safetensors mmap path, not
+  confirmed); unknown whether it's Windows-specific, CPU-specific, or a
+  broader issue — not tested on Linux or GPU; isolation is only wired
+  into the three sweep commands, not the single-run `run`/`compare`
+  commands, which still crash uninsulated same as before.
+  Tests: 3 new in `tests/test_efficiency_benchmarks_engine.py`
+  (dtype x budget coverage, real failures shown not hidden, budget
+  ordering), 3 new in `tests/test_efficiency_results.py` (matrix report
+  grid/failures/empty), 1 new in `tests/test_efficiency_api.py`
+  (`/matrix-sweep` endpoint), 6 new in
+  `tests/test_efficiency_isolated_runner.py` (the crash-containment
+  logic itself). 286 passing (was 273; one unrelated pre-existing flaky
+  test in `test_lora_over_wire.py` observed once, confirmed to pass
+  standalone and on a clean re-run of the full suite — not caused by this
+  work).
+
+- [x] **`tron_router/` — the routing layer, the first thing connecting
+  single-node efficiency to the distributed pool** (new branch,
+  `feat/compute-routing-layer`). `decide_placement(job)` picks `local`
+  (the `tron_efficiency` advisor says it fits without offload), `pooled`
+  (a real live `queue_server.py` instance is reachable with fresh-
+  heartbeat workers — routes into the existing `tron/spine/matcher.py`
+  job path, doesn't reimplement its placement logic), or `dedicated`
+  (nothing else is a safe answer — a flag for real infrastructure this
+  project doesn't provision, not an API call to a cloud provider). Same
+  confidence/rationale/warnings discipline as the memory advisor.
+  Full real, live verification (not just unit tests) in
+  `writeup/compute-routing-layer.md`: started a real `queue_server.py`,
+  confirmed unreachable-pool, empty-pool, and one-real-registered-worker
+  behavior, confirmed a real small model short-circuits straight to
+  `local` without ever querying the pool. `tron_efficiency` and `tron`
+  remain mutually independent — this package imports from both, neither
+  is modified to depend on the other.
+  **Honest scope (updated 2026-10-28):** the "no real external fleet"
+  gap below this item described is now closed for the pooling path
+  specifically — see "Testing on a real external fleet" in
+  `writeup/compute-routing-layer.md`: two real Linode nodes in separate
+  data centers (Newark, Fremont), a real master and a real worker, a
+  real job submitted from a third machine and executed for real. That
+  test found and fixed two real bugs (a too-tight pool-reachability
+  timeout, and a `job_id` key bug that silently broke every real
+  job's completion report) that no same-machine or mocked test had
+  ever caught. It also found a real, unfixed constraint
+  (cross-Python-version cloudpickle closures don't deserialize) and an
+  unresolved anomaly in the dead-worker-on-real-infra path — both
+  documented there, not swept under "future work." The pool-health
+  signal now does use real measured bandwidth/latency (see
+  `tron/spine/topology.py`'s `/topology` endpoint, wired into
+  `query_pool_status` below).
+  Tests: 7 new in `tests/test_router_decision.py`, all via dependency
+  injection (fake hardware, fake/injected pool status) — no network calls
+  in the test suite itself, only in the separate manual live-verification
+  session. 293 passing (was 286).
+
+- [x] **`tron_router/handoff.py` — actually executing a `pooled`
+  decision, not just deciding it.** `decide_placement` only ever
+  recommended; `submit_to_pool(job, decision, func, ...)` submits a real
+  cloudpickle-serialized `(func, args, kwargs)` to the live master's
+  `/submit` — the exact same path `@tron.remote` already uses
+  (`tron/serializer.py`, `tron/magic_future.py`) — and returns a
+  `MagicFuture` so the caller reads the real result back once a worker
+  executes it. Raises `HandoffError` if handed a non-`pooled` decision,
+  rather than silently re-deciding or falling back.
+  **Real bug found and fixed while building this, not before:**
+  `worker.py`'s `execute_job` was discarding every submitted job's
+  `function` payload entirely and returning a fake echoed `{"status":
+  "ok", "message": prompt}` instead of running it. Since `/submit`
+  rejects any job *without* a function payload, this meant **nothing**
+  ever submitted through `@tron.remote` or `tron_router` had actually
+  executed anywhere in this codebase before now — the "remote execution"
+  path looked complete (real job IDs, real status polling, a real
+  `MagicFuture.get()`) but the function itself was silently dropped on
+  the worker side. Fixed: `execute_job` now deserializes
+  `job["function"]` via `tron.serializer.deserialize` and calls it for
+  real, falling back to the old echo behavior only if no function
+  payload is present (defensive — in practice every queued job has one).
+  Verified end to end for real in `tests/test_router_handoff.py`: a real
+  `uvicorn`-served `queue_server.py` in a background thread (not
+  FastAPI's `TestClient` — `submit_to_pool` and `worker.py` both speak
+  real HTTP over a real socket), a real worker registration, a real
+  `/submit` → `/next_job` → execute → `/complete` → `/status` round trip
+  for both a successful function (`_add(3, 4) == 7`, deserialized and
+  actually computed, not echoed) and a deliberately-failing one
+  (surfaces as a real `{"status": "error", ...}` job result).
+  **Honest scope:** this closes the "no automated test exercises the
+  actual hand-off" gap the previous entry named, for the submission and
+  execution mechanics specifically. It does not change `dedicated`'s
+  scope (still a flag, not a provisioning call). **(The "no retry/
+  reliability handling for a dropped worker" claim below turned out to
+  be wrong — see the next entry.)**
+  Tests: 3 new in `tests/test_router_handoff.py`. 296 passing (was 293).
+
+- [x] **The pool-health signal now uses real measured network data, not
+  just worker count/memory** — closing the other half of the gap the
+  routing-layer entry above named. `queue_server.py` gets a new
+  `GET /topology` endpoint exposing the real per-worker latency/
+  bandwidth `tron/spine/topology.py` already tracked internally for the
+  matcher's own placement scoring, but never exposed to an external
+  caller. `tron_router.decision.query_pool_status` reads it (best-effort
+  — its absence doesn't make the pool unreachable, since `/workers`
+  already answered that) and `PoolStatus` carries the real per-worker
+  `measured_links`. `decide_placement`'s `pooled` rationale now cites the
+  real averaged latency/bandwidth across alive workers that have been
+  measured, and adds an honest warning instead when none have (the
+  matcher would be placing blind to real network cost) or when
+  `/topology` itself wasn't reachable. No invented thresholds — this
+  surfaces the real numbers and their absence, it doesn't yet use them
+  to change which target gets picked (that would need calibration data
+  this project doesn't have).
+  Tests: 1 new in `tests/test_queue_server_topology.py` (the real
+  endpoint), 2 new in `tests/test_router_topology.py` (a real live
+  `uvicorn` server, proving `query_pool_status` actually reads real
+  measured data over real HTTP — not a mock), 3 new in
+  `tests/test_router_decision.py` (pure unit tests of the rationale/
+  warning logic via injected `measured_links`). 302 passing (was 296).
+
+- [x] **A repeated claim in this document turned out to be wrong, and
+  was checked for real instead of just restated.** Multiple earlier
+  entries said "no retry/reliability handling if a pooled worker drops
+  mid-job — a pooled job with no worker to finish it just never
+  completes." That was never actually tested; it turns out
+  `queue_server.py` already had a real mechanism for exactly this
+  (`_watchdog_loop`, using the spine's content-addressed event log —
+  `tron/spine/log.py`'s `recover_orphaned_tasks` — to detect a worker
+  whose heartbeat went stale while it held a job, and requeue that job
+  for another worker to pick up), but nothing had ever driven it
+  end-to-end through the actual submission path this project uses
+  (`tron_router.handoff.submit_to_pool` → `@tron.remote`'s same
+  `/submit`/`/next_job`/`/complete` mechanics). `tests/test_pool_reliability.py`
+  does, for real: submits a real function, has a real registered worker
+  claim it via `/next_job` and then simply go silent (no heartbeat, no
+  `/complete` — not simulated, an actual dead worker), waits for the
+  real watchdog thread to detect the staleness and requeue the job,
+  then has a second real worker pick up the *same* `job_id`, actually
+  run the real deserialized function, and complete it — with the
+  original caller's `MagicFuture` from the first submission still
+  resolving to the correct real result (`42`, from `_multiply(6, 7)`,
+  surviving the requeue intact). This passed on the first real run.
+  **What this does and does not prove:** it proves the requeue mechanism
+  works for one dead worker, one job, in this test's conditions. It does
+  *not* prove anything about a worker that's hung-but-still-heartbeating
+  (the watchdog only catches a stale heartbeat, not a worker that's
+  alive but stuck), or anything at real-fleet scale with real untrusted
+  machines — ROADMAP's "no real second physical host" gap is unchanged.
+  Lesson for future sessions, stated honestly: a limitation written down
+  once and repeated in later entries without re-checking can be stale —
+  worth a real test before restating it again.
+  Tests: 1 new in `tests/test_pool_reliability.py`. 303 passing (was 302).
+
+- [x] **The retry-count cap the previous entry flagged as missing
+  (no fix at the time) — fixed.** A job whose every assigned worker died
+  in turn would requeue forever; `_watchdog_loop` now tracks a real
+  `requeue_count` on the job itself (added to `/submit`'s job dict,
+  defaults to 0) and, once a job exceeds `MAX_JOB_REQUEUE_ATTEMPTS`
+  (env `TRON_MAX_JOB_REQUEUE_ATTEMPTS`, default 3) dead-worker requeues,
+  gives up: marks it `completed` with a real
+  `{"status": "error", "error": "gave up after N requeue(s) -- ..."}`
+  result (same shape a failing submitted function already produces, not
+  a new status value) instead of silently requeuing it again. Emits a
+  real `"failed"` spine event so `recover_orphaned_tasks` correctly
+  stops returning it.
+  Verified for real in a new test in `tests/test_pool_reliability.py`:
+  `MAX_JOB_REQUEUE_ATTEMPTS` set to 2, three real doomed workers in a
+  row each claim the same job and die, and the job is confirmed to stop
+  requeuing after the second real requeue and resolve to a real error
+  result on the third — not inferred from logs, read directly off
+  `job_store`/`job_queue` state.
+  Tests: 1 new in `tests/test_pool_reliability.py`. 304 passing (was 303).
+
+- [x] **Closed the "no real second physical host" gap for the pooling
+  path — the first time this project has ever run a real master and a
+  real worker on genuinely separate machines.** Two real Linode Nanode
+  1GB instances ($0.0075/hr each, ~cents for the session, torn down
+  immediately after) in separate data centers (Newark, Fremont). Real
+  measured network cost between them (136ms latency, ~15Mbps), a real
+  `pooled` decision, real job execution on the Fremont node from a
+  submission made on a third machine, real result back in 2.25s.
+  That one real test immediately found and fixed two real bugs no
+  same-machine or mocked test had ever caught:
+  (1) `query_pool_status`'s hardcoded 2.0s timeout was too tight
+  against real WAN latency and intermittently misreported a healthy
+  pool as unreachable (fixed: 5.0s default + 1 retry);
+  (2) `worker.py`'s real polling loop read the wrong dict key
+  (`job.get("job_id")` — no job has ever had that key, only `"id"`)
+  when reporting completion, so every job ever run through the actual
+  loop (not the test helper, which used the correct key directly and
+  masked this completely) reported to `/complete/None` and the
+  submitter's `MagicFuture` waited forever for an already-computed,
+  silently-discarded result.
+  **Also found, not fixed:** cross-Python-version cloudpickle closures
+  don't deserialize (`SystemError: error return without exception
+  set` submitting from 3.11 to a 3.12 worker) — a real constraint on
+  heterogeneous real fleets, not a bug with an obvious fix.
+  **Also found, not root-caused:** re-running the dead-worker-requeue
+  test across these same two real nodes (one real worker killed over
+  SSH mid-job) showed the watchdog correctly detecting the real dead
+  worker and the system not hanging, but two separate anomalies in the
+  actual job result (an instant "completion" of a job whose own logic
+  should have taken 25 real seconds; a `TypeError: 'module' object
+  does not support item assignment` on a second different
+  `__main__`-sourced closure deserialized by the same long-lived
+  worker process) — flagged honestly as open, not claimed as proven at
+  the same confidence as the pooling path.
+  **Added a first real execution guardrail**, closing the most acute
+  part of the "arbitrary remote code, no sandbox" gap: `worker.py`'s
+  `execute_job` now runs the deserialized function in a child process
+  (via `multiprocessing`'s `"fork"` context) with a real wall-clock
+  timeout (`TRON_JOB_TIMEOUT_SECONDS`, default 300s) and a real
+  address-space cap (`TRON_JOB_MEMORY_LIMIT_MB` via `RLIMIT_AS`,
+  default 2048MB) — verified for real on a Linode Linux node (a job
+  that hangs forever, a job that allocates past the limit, both killed
+  and reported as real errors instead of wedging the worker or OOMing
+  the host). This is a first layer, not a sandbox: no seccomp, no
+  container, no restricted filesystem/network access. Real multi-tenant
+  isolation is still open.
+  Full detail, including the honest "is this ready for AI companies to
+  use" assessment, in writeup/compute-routing-layer.md's "Testing on a
+  real external fleet" section.
+  Tests: 1 new in `tests/test_worker_job_guardrail.py` (skips on
+  platforms without a `fork` start method — proven on real Linux
+  hardware separately, not just locally). 304 passing locally (2 skip
+  on this Windows dev machine).
+
+- [x] **New, separate initiative: `tron_costtrace/` — request-level
+  cost/outcome recording for live LLM API traffic** (branch
+  `feat/cost-trace-recorder`). Preceded by a strategic audit mapping
+  TRON's existing capabilities against the broader "AI compute
+  efficiency" opportunity: the spine/matcher/pooling work and
+  `tron_efficiency`'s advisor are real and tested, but they measure
+  TRON's own local inference/training workloads, not what the
+  project's actual target customer (AI application/agent companies)
+  spends money on — hosted LLM API calls. This is the smallest concrete
+  step into that gap: a `trace()` context manager a caller wraps around
+  an existing OpenAI- or Anthropic-shaped SDK call, recording model,
+  token usage, latency, retries, and success/failure to a local JSONL
+  log (no network egress — this traces a caller's own, possibly
+  sensitive, usage). `tron_costtrace/report.py` computes **cost per
+  successful task** (not cost per call or per token) per task tag,
+  explicitly surfacing failed-call cost as overhead and warning when a
+  model's cost is unknown (missing from the pinned pricing table) or
+  when retries occurred inside a single traced call (only the final
+  attempt's usage is captured, so known cost is a floor, not exact, in
+  that case) — the same "state what wasn't measured" discipline
+  `tron_efficiency`'s reports use, reused in shape, not in code (the
+  workload here is live API traffic, not local model loading, so
+  nothing from that package's model-loading internals applies).
+  Deliberately does no routing or model-switching yet — pure
+  observation, meant to produce one real cost-per-successful-task
+  finding on real or representative traffic before any automatic
+  optimization gets built on top of it. 22 new tests
+  (`tests/test_costtrace_pricing.py`, `_store.py`, `_tracer.py`,
+  `_report.py`), 326 passing (was 304), full suite green.
+  **Honest gaps:** the pinned pricing table is a handful of common
+  OpenAI/Anthropic models snapshotted by hand, not a live price feed,
+  and will drift stale; no real customer or design-partner traffic has
+  been run through it yet — the next step is getting one real report
+  from real usage, not building a second feature.

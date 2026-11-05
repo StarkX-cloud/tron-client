@@ -1,0 +1,350 @@
+"""CLI for the TRON Compute Efficiency Engine.
+
+    python -m tron_efficiency.cli hardware
+    python -m tron_efficiency.cli recommend --model meta-llama/Llama-3.2-1B
+    python -m tron_efficiency.cli run --policy baseline
+    python -m tron_efficiency.cli run --policy offload --memory-budget-mb 128
+    python -m tron_efficiency.cli compare --memory-budget-mb 128
+    python -m tron_efficiency.cli sweep --memory-budget-mb-list 50,100,200,400
+    python -m tron_efficiency.cli dtype-sweep --dtypes fp32,fp16,int8,int4
+    python -m tron_efficiency.cli matrix-sweep --dtypes fp32,int8 --memory-budget-mb-list 100,200
+    python -m tron_efficiency.cli report <run_id> [<run_id> ...]
+    python -m tron_efficiency.cli serve
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+
+from tron_efficiency.hardware.detect import detect_hardware
+from tron_efficiency.memory.policies import BaselinePolicy, OffloadPolicy
+from tron_efficiency.results.report import generate_report
+from tron_efficiency.results.writer import list_runs, save_run, write_csv
+from tron_efficiency.workloads.config import WorkloadConfig
+from tron_efficiency.workloads.runner import run_workload
+
+
+def _print_outcome(result) -> None:
+    o = result.outcome
+    if not o.success:
+        print(f"[{o.policy_name}] FAILED: {o.error}")
+        return
+    print(
+        f"[{o.policy_name}] dtype={o.dtype or 'checkpoint-default'} "
+        f"load={o.load_time_seconds:.3f}s "
+        f"ttft={o.time_to_first_token_seconds:.3f}s "
+        f"e2e={o.end_to_end_latency_seconds:.3f}s "
+        f"tok/s={o.tokens_per_second:.2f} "
+        f"peak_cpu_mem={o.peak_cpu_memory_bytes} "
+        f"run_id={result.run_id}"
+    )
+    for w in result.warnings:
+        print(f"  warning: {w}")
+
+
+def _build_config(args) -> WorkloadConfig:
+    return WorkloadConfig(
+        model_name=args.model,
+        prompt=args.prompt,
+        max_new_tokens=args.max_new_tokens,
+        batch_size=args.batch_size,
+        device=args.device,
+        dtype=args.dtype,
+    )
+
+
+def _build_policy(args):
+    if args.policy == "baseline":
+        return BaselinePolicy()
+    budget_bytes = args.memory_budget_mb * 1024 * 1024
+    return OffloadPolicy(memory_budget_bytes=budget_bytes)
+
+
+def cmd_hardware(args) -> int:
+    hw = detect_hardware()
+    print(json.dumps(hw.to_dict(), indent=2))
+    return 0
+
+
+def cmd_recommend(args) -> int:
+    from tron_efficiency.advisor.recommend import recommend
+
+    gpu_budget_bytes = args.gpu_budget_mb * 1024 * 1024 if args.gpu_budget_mb else None
+    rec = recommend(args.model, gpu_budget_bytes_override=gpu_budget_bytes)
+    print(json.dumps(rec.to_dict(), indent=2))
+    if rec.confidence == "low":
+        print(f"\nNOTE: confidence is LOW -- read the warnings above before trusting this.", file=sys.stderr)
+    return 0
+
+
+def cmd_run(args) -> int:
+    from tron_efficiency.results.schema import BenchmarkResult
+
+    hardware = detect_hardware()
+    config = _build_config(args)
+    policy = _build_policy(args)
+    outcome = run_workload(config, policy)
+    result = BenchmarkResult.build(hardware, config, policy.describe(), outcome)
+    save_run(result)
+    _print_outcome(result)
+    return 0 if outcome.success else 1
+
+
+def cmd_compare(args) -> int:
+    from tron_efficiency.benchmarks.engine import run_suite
+
+    config = _build_config(args)
+    budget_bytes = args.memory_budget_mb * 1024 * 1024
+    policies = [BaselinePolicy(), OffloadPolicy(memory_budget_bytes=budget_bytes)]
+    results = run_suite(config, policies)
+    for r in results:
+        save_run(r)
+        _print_outcome(r)
+    print()
+    print(generate_report(results, hourly_rate_usd=args.hourly_rate))
+    return 0
+
+
+def cmd_sweep(args) -> int:
+    from tron_efficiency.benchmarks.engine import run_budget_sweep
+    from tron_efficiency.results.report import generate_sweep_report
+
+    config = _build_config(args)
+    budgets_bytes = [mb * 1024 * 1024 for mb in args.memory_budget_mb_list]
+    results = run_budget_sweep(
+        config, budgets_bytes, include_baseline=not args.no_baseline, isolated=args.isolated
+    )
+    for r in results:
+        save_run(r)
+        _print_outcome(r)
+    print()
+    print(generate_sweep_report(results))
+    return 0
+
+
+def cmd_dtype_sweep(args) -> int:
+    from tron_efficiency.benchmarks.engine import run_dtype_sweep
+    from tron_efficiency.results.report import generate_dtype_sweep_report
+
+    config = WorkloadConfig(
+        model_name=args.model,
+        prompt=args.prompt,
+        max_new_tokens=args.max_new_tokens,
+        batch_size=args.batch_size,
+        device=args.device,
+    )
+    dtypes = [None if d == "checkpoint-default" else d for d in args.dtypes]
+    results = run_dtype_sweep(config, dtypes, isolated=args.isolated)
+    for r in results:
+        save_run(r)
+        _print_outcome(r)
+    print()
+    print(generate_dtype_sweep_report(results))
+    return 0
+
+
+def cmd_matrix_sweep(args) -> int:
+    from tron_efficiency.benchmarks.engine import run_matrix_sweep
+    from tron_efficiency.results.report import generate_matrix_report
+
+    config = WorkloadConfig(
+        model_name=args.model,
+        prompt=args.prompt,
+        max_new_tokens=args.max_new_tokens,
+        batch_size=args.batch_size,
+        device=args.device,
+    )
+    dtypes = [None if d == "checkpoint-default" else d for d in args.dtypes]
+    budgets_bytes = [mb * 1024 * 1024 for mb in args.memory_budget_mb_list]
+    results = run_matrix_sweep(config, dtypes, budgets_bytes, isolated=args.isolated)
+    for r in results:
+        save_run(r)
+        _print_outcome(r)
+    print()
+    print(generate_matrix_report(results))
+    return 0
+
+
+def cmd_report(args) -> int:
+    all_runs = {r.run_id: r for r in list_runs()}
+    if args.run_ids:
+        selected = [all_runs[rid] for rid in args.run_ids if rid in all_runs]
+        missing = [rid for rid in args.run_ids if rid not in all_runs]
+        for rid in missing:
+            print(f"warning: run_id {rid} not found, skipping", file=sys.stderr)
+    else:
+        selected = list(all_runs.values())
+    print(generate_report(selected, hourly_rate_usd=args.hourly_rate))
+    if args.csv:
+        write_csv(selected, args.csv)
+        print(f"wrote {args.csv}", file=sys.stderr)
+    return 0
+
+
+def cmd_serve(args) -> int:
+    from tron_efficiency.api.server import serve
+
+    serve(port=args.port)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="tron_efficiency")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("hardware", help="report detected hardware").set_defaults(
+        func=cmd_hardware
+    )
+
+    recommend_p = sub.add_parser(
+        "recommend", help="auto-pick a dtype/policy/budget for a model on this hardware"
+    )
+    recommend_p.add_argument("--model", required=True)
+    recommend_p.add_argument(
+        "--gpu-budget-mb",
+        type=int,
+        default=None,
+        help="override detected GPU VRAM with this budget (MB) instead of using the full card",
+    )
+    recommend_p.set_defaults(func=cmd_recommend)
+
+    def add_workload_args(p):
+        p.add_argument("--model", default="EleutherAI/pythia-70m")
+        p.add_argument("--prompt", default=WorkloadConfig().prompt)
+        p.add_argument("--max-new-tokens", type=int, default=32)
+        p.add_argument("--batch-size", type=int, default=1)
+        p.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
+        p.add_argument(
+            "--dtype",
+            default=None,
+            choices=["fp32", "fp16", "bf16", "int8", "int4"],
+            help="explicit precision to load the model in (default: whatever the "
+            "checkpoint is stored as, unchanged). int8/int4 use real bitsandbytes "
+            "quantization; int4 cannot combine with --policy offload.",
+        )
+
+    run_p = sub.add_parser("run", help="run one workload under one policy")
+    add_workload_args(run_p)
+    run_p.add_argument("--policy", choices=["baseline", "offload"], default="baseline")
+    run_p.add_argument("--memory-budget-mb", type=int, default=100)
+    run_p.set_defaults(func=cmd_run)
+
+    compare_p = sub.add_parser(
+        "compare", help="run baseline and offload back-to-back and report"
+    )
+    add_workload_args(compare_p)
+    compare_p.add_argument("--memory-budget-mb", type=int, default=100)
+    compare_p.add_argument("--hourly-rate", type=float, default=None)
+    compare_p.set_defaults(func=cmd_compare)
+
+    def _parse_mb_list(value: str) -> list[int]:
+        return [int(x.strip()) for x in value.split(",") if x.strip()]
+
+    sweep_p = sub.add_parser(
+        "sweep", help="run the same workload across multiple memory budgets (a real tradeoff curve)"
+    )
+    add_workload_args(sweep_p)
+    sweep_p.add_argument(
+        "--memory-budget-mb-list",
+        type=_parse_mb_list,
+        required=True,
+        help="comma-separated budgets in MB, e.g. 50,100,200,400",
+    )
+    sweep_p.add_argument(
+        "--no-baseline", action="store_true", help="skip the unconstrained baseline run"
+    )
+    sweep_p.add_argument(
+        "--isolated",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="run each config in its own subprocess so a native-level crash (a real "
+        "one was found and reproduced during development -- see ROADMAP.md) can't "
+        "kill the whole sweep and lose every other result. On by default; costs real "
+        "wall-clock time (a full process start + torch import per run) -- pass "
+        "--no-isolated to trade that safety for speed.",
+    )
+    sweep_p.set_defaults(func=cmd_sweep)
+
+    def _parse_dtype_list(value: str) -> list[str]:
+        return [x.strip() for x in value.split(",") if x.strip()]
+
+    dtype_sweep_p = sub.add_parser(
+        "dtype-sweep",
+        help="run BaselinePolicy once per dtype (quantization's real cost/benefit, measured)",
+    )
+    dtype_sweep_p.add_argument("--model", default="EleutherAI/pythia-70m")
+    dtype_sweep_p.add_argument("--prompt", default=WorkloadConfig().prompt)
+    dtype_sweep_p.add_argument("--max-new-tokens", type=int, default=32)
+    dtype_sweep_p.add_argument("--batch-size", type=int, default=1)
+    dtype_sweep_p.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
+    dtype_sweep_p.add_argument(
+        "--dtypes",
+        type=_parse_dtype_list,
+        default=["checkpoint-default", "fp32", "fp16", "int8", "int4"],
+        help="comma-separated dtypes to compare, e.g. fp32,fp16,int8,int4 "
+        "('checkpoint-default' means no torch_dtype passed at all, the old behavior)",
+    )
+    dtype_sweep_p.add_argument(
+        "--isolated",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="run each dtype in its own subprocess (see sweep's --isolated for why). "
+        "On by default; pass --no-isolated to trade that safety for speed.",
+    )
+    dtype_sweep_p.set_defaults(func=cmd_dtype_sweep)
+
+    matrix_sweep_p = sub.add_parser(
+        "matrix-sweep",
+        help="cross dtypes x memory budgets for OffloadPolicy -- the full landscape in one pass",
+    )
+    matrix_sweep_p.add_argument("--model", default="EleutherAI/pythia-70m")
+    matrix_sweep_p.add_argument("--prompt", default=WorkloadConfig().prompt)
+    matrix_sweep_p.add_argument("--max-new-tokens", type=int, default=32)
+    matrix_sweep_p.add_argument("--batch-size", type=int, default=1)
+    matrix_sweep_p.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
+    matrix_sweep_p.add_argument(
+        "--dtypes",
+        type=_parse_dtype_list,
+        default=["checkpoint-default", "int8"],
+        help="comma-separated dtypes, e.g. fp32,int8 ('checkpoint-default' = no dtype kwarg passed)",
+    )
+    matrix_sweep_p.add_argument(
+        "--memory-budget-mb-list",
+        type=_parse_mb_list,
+        required=True,
+        help="comma-separated budgets in MB, e.g. 50,100,200,400",
+    )
+    matrix_sweep_p.add_argument(
+        "--isolated",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="run each (dtype, budget) cell in its own subprocess -- this is exactly "
+        "the command that found a real, reproducible segfault during development "
+        "(see ROADMAP.md). On by default; pass --no-isolated to trade that safety "
+        "for speed.",
+    )
+    matrix_sweep_p.set_defaults(func=cmd_matrix_sweep)
+
+    report_p = sub.add_parser("report", help="render a report from saved runs")
+    report_p.add_argument("run_ids", nargs="*")
+    report_p.add_argument("--hourly-rate", type=float, default=None)
+    report_p.add_argument("--csv", default=None)
+    report_p.set_defaults(func=cmd_report)
+
+    serve_p = sub.add_parser("serve", help="run the API + dashboard server")
+    serve_p.add_argument("--port", type=int, default=None)
+    serve_p.set_defaults(func=cmd_serve)
+
+    return parser
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

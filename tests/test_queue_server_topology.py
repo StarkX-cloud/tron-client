@@ -55,6 +55,22 @@ def test_negative_latency_is_ignored_not_recorded(client):
     assert qs.topology.latency("master", "worker-a") is None
 
 
+def test_topology_endpoint_reports_real_measured_latency_for_every_worker(client):
+    tc, _qs = client
+    token_a = _register(tc, "worker-a")
+    _register(tc, "worker-b")  # never heartbeats -- should show nulls, not an error
+
+    _heartbeat(tc, "worker-a", token_a, latency_ms=17.5)
+
+    resp = tc.get("/topology")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["worker-a"]["latency_ms"] == 17.5
+    assert body["worker-b"]["latency_ms"] is None
+    assert body["worker-b"]["bandwidth_mbps"] is None
+
+
 def test_high_latency_worker_is_routed_the_lighter_of_two_queued_jobs(client):
     """/next_job picks the best-scoring job out of ONE worker's own queue
     in a single call — there's no point in this pull-based architecture

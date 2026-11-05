@@ -9,3 +9,5 @@ transformers
 peft
 accelerate
 safetensors
+psutil
+bitsandbytes
