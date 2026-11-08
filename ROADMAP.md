@@ -1122,3 +1122,49 @@ technical design behind each phase.
   simulated vRAM *aggregation* (pooling memory across nodes, as opposed
   to just checking fit on one node) remains an explicitly-labeled
   simulation, untouched by this work and not attempted here.
+
+- [x] **Benchmark harness — closes the "asserted but never measured" gap
+  the memory-aware-placement entry above left open** (branch
+  `feat/memory-placement-benchmark`). The strategic brief that motivated
+  the infra pivot was explicit that a vertical slice needs a real
+  benchmark against a baseline before claiming a win; that step had been
+  skipped. `tron/spine/matcher.py`'s `score_pair`/`match_jobs_to_workers`
+  gain a `memory_aware: bool = True` parameter — `memory_aware=False`
+  reproduces the function's exact pre-`memory_fits` behavior, so a
+  benchmark can A/B test against the real prior code path instead of a
+  hand-reimplemented stand-in that could silently drift from what
+  actually shipped. `benchmarks/memory_aware_placement.py` runs both
+  modes over an identical synthetic job batch and heterogeneous worker
+  pool and reports:
+  - **Would-OOM rate** (ground truth computed independently of either
+    scorer: did an assignment exceed the worker's registered capacity).
+    Real measured result across several seeds/pool shapes: the
+    memory-blind baseline placed 28.6%-85.7% of its assignments onto a
+    worker that couldn't actually hold the job; the memory-aware matcher
+    produced **zero** such placements every run, by construction.
+  - **Scheduling overhead**, measured by wall-clock timing the real
+    `match_jobs_to_workers` call over repeated trials, reported honestly:
+    the measured delta was smaller than run-to-run noise at this sample
+    size, so this is reported as "not distinguishable from zero
+    overhead," not as a false-precision millisecond figure. (The hard
+    filter short-circuits the rest of a pair's score for an infeasible
+    pair, which is likely why it isn't a clear net cost despite doing
+    extra work — a hypothesis stated as such, not re-verified further
+    here.)
+  - **Estimate accuracy** — re-derives the advisor's real param-count
+    formula against EleutherAI/pythia-70m's real architecture fields live
+    in the benchmark run (0.040% error against the real measured count),
+    rather than quoting a number from a prior session's notes.
+  7 new tests (`tests/test_benchmark_memory_aware_placement.py`) plus 3 in
+  `tests/test_matcher.py` for the new toggle, 381 passing (was 363; one
+  pre-existing unrelated flaky test in `test_costtrace_tracer.py`
+  observed once, confirmed to pass standalone — a `time.sleep`-based
+  timing assertion, not caused by this work).
+  **Honest scope, stated in the benchmark's own output:** synthetic — no
+  real GPU, no real OOM was triggered, and no external scheduler
+  (Ray/SkyPilot/RunPod) was run side by side for a head-to-head
+  comparison. This proves the scheduling logic itself prevents an
+  impossible placement at a measured (not assumed) overhead; a real
+  multi-node OOM-vs-fits experiment across genuinely separate machines —
+  the kind already done for network placement in the Linode pooling
+  work — is the natural next step, not yet done.

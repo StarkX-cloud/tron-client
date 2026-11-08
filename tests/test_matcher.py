@@ -214,3 +214,29 @@ def test_equal_latency_ties_broken_by_priority(topology):
     assert len(assignments) == 2
     assigned_jobs = {job_id for job_id, _ in assignments}
     assert assigned_jobs == {"low-priority", "high-priority"}
+
+
+# -- memory_aware toggle: lets a benchmark reproduce the exact
+# pre-memory-fit behavior on the real codebase, not a reimplementation.
+
+
+def test_memory_aware_false_reproduces_pre_memory_fit_score_pair(topology):
+    worker = {"memory_gb": 4}
+    job = {"required_memory_gb": 16, "priority": 3}
+    aware_score = score_pair(job, "worker-1", worker, topology, memory_aware=True)
+    blind_score = score_pair(job, "worker-1", worker, topology, memory_aware=False)
+    assert aware_score == INFEASIBLE_SCORE
+    assert blind_score == 3.0  # priority alone, no latency measured -- the check never ran
+
+
+def test_memory_aware_true_is_the_default(topology):
+    worker = {"memory_gb": 4}
+    job = {"required_memory_gb": 16, "priority": 3}
+    assert score_pair(job, "worker-1", worker, topology) == INFEASIBLE_SCORE
+
+
+def test_match_jobs_to_workers_memory_aware_false_can_place_an_oversized_job(topology):
+    jobs = [{"id": "big-job", "priority": 5, "required_memory_gb": 24}]
+    workers = {"small": {"memory_gb": 8}}
+    assert match_jobs_to_workers(jobs, workers, topology, memory_aware=True) == []
+    assert match_jobs_to_workers(jobs, workers, topology, memory_aware=False) == [("big-job", "small")]
