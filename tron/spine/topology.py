@@ -14,6 +14,14 @@ self-reported by the worker:
   that worker" — a heavy artifact over a thin pipe is a real cost that
   latency alone doesn't capture. `matcher.py` / `global_brain.py` fold
   both into one placement score.
+- **Free memory** — GB currently available on the worker (real GPU VRAM
+  via `nvidia-smi`, or system RAM via `psutil` on a CPU-only worker),
+  self-reported on every heartbeat (see worker.py's
+  `measure_free_memory_gb`). Unlike latency/bandwidth this is used as a
+  **hard filter**, not a soft penalty, in `matcher.py` — a job that
+  genuinely will not fit in a node's currently-free memory is excluded
+  from that node, not merely scored lower, because the failure mode is an
+  OOM, not "a bit slower."
 
 This is deliberately a star-topology model: workers talk to the master,
 not to each other, which is the actual shape of the current cluster. A
@@ -51,6 +59,11 @@ class TopologyMap:
         self._last_seen: dict[tuple[str, str], float] = {}
         self._bandwidth_mbps: dict[tuple[str, str], float] = {}
         self._bw_last_seen: dict[tuple[str, str], float] = {}
+        # Memory is a per-node property (how much is free on that node right
+        # now), not a per-link measurement like latency/bandwidth — so it's
+        # keyed by node name alone, not a (from, to) pair.
+        self._free_memory_gb: dict[str, float] = {}
+        self._mem_last_seen: dict[str, float] = {}
 
     @staticmethod
     def _key(from_node: str, to_node: str) -> tuple[str, str]:
@@ -116,6 +129,42 @@ class TopologyMap:
         with self._lock:
             value = self._bandwidth_mbps.get(key)
             last_seen = self._bw_last_seen.get(key)
+        if value is None or last_seen is None:
+            return None
+        current_time = now if now is not None else time.time()
+        if current_time - last_seen > self._max_age:
+            return None
+        return value
+
+    def record_memory(
+        self,
+        node: str,
+        free_gb: float,
+        timestamp: Optional[float] = None,
+    ) -> None:
+        """Record a self-reported free-memory sample (GB) for `node` — real
+        currently-available GPU VRAM if the worker has a GPU, else free
+        system RAM (see worker.py's `measure_free_memory_gb`). Same EWMA
+        smoothing and age-out as latency/bandwidth: a node that stopped
+        reporting shouldn't keep coasting on a stale "plenty of room"
+        reading. Zero is accepted (a node can genuinely be out of room);
+        only negative values are rejected as a measurement bug."""
+        if free_gb < 0:
+            raise ValueError("free_gb must be non-negative")
+        ts = timestamp if timestamp is not None else time.time()
+        with self._lock:
+            previous = self._free_memory_gb.get(node)
+            smoothed = free_gb if previous is None else previous + self._smoothing * (free_gb - previous)
+            self._free_memory_gb[node] = smoothed
+            self._mem_last_seen[node] = ts
+
+    def memory(self, node: str, now: Optional[float] = None) -> Optional[float]:
+        """Smoothed free-memory estimate in GB for `node`, or None if never
+        measured or the measurement has aged out — same contract as
+        `latency()`/`bandwidth()`."""
+        with self._lock:
+            value = self._free_memory_gb.get(node)
+            last_seen = self._mem_last_seen.get(node)
         if value is None or last_seen is None:
             return None
         current_time = now if now is not None else time.time()

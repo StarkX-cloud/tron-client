@@ -394,6 +394,15 @@ def heartbeat(worker_name: str, request: Request, payload: dict = None):
                 worker["bandwidth_mbps_down"] = float(bw_down)
             if isinstance(bw_up, (int, float)) and bw_up > 0:
                 worker["bandwidth_mbps_up"] = float(bw_up)
+            # Memory-aware placement: the worker's real currently-free
+            # memory (GPU VRAM via nvidia-smi, or system RAM via psutil —
+            # see worker.py's measure_free_memory_gb), not the static
+            # total capacity reported once at registration. 0 is a
+            # legitimate reading (genuinely out of room); only a missing
+            # field means "not reported" here.
+            free_memory_gb = payload.get("free_memory_gb")
+            if isinstance(free_memory_gb, (int, float)) and free_memory_gb >= 0:
+                worker["free_memory_gb"] = float(free_memory_gb)
 
     if payload:
         latency_ms = payload.get("latency_ms")
@@ -402,6 +411,9 @@ def heartbeat(worker_name: str, request: Request, payload: dict = None):
         bw_down = payload.get("bandwidth_mbps_down")
         if isinstance(bw_down, (int, float)) and bw_down > 0:
             topology.record_bandwidth("master", worker_name, float(bw_down))
+        free_memory_gb = payload.get("free_memory_gb")
+        if isinstance(free_memory_gb, (int, float)) and free_memory_gb >= 0:
+            topology.record_memory(worker_name, float(free_memory_gb))
 
     return {"alive": True, "worker_name": worker_name}
 
@@ -478,6 +490,14 @@ def submit(job: dict):
         # global_brain.decide — 0 (the default) leaves placement exactly as
         # it was before bandwidth scoring existed.
         "transfer_bytes": float(job.get("transfer_bytes", 0) or 0),
+        # Hard memory-fit requirement in GB (see tron/spine/matcher.py's
+        # memory_fits) — distinct from the pre-existing `memory_gb` field
+        # above, which is a soft scheduling weight, not a correctness
+        # constraint. 0 (the default) means "no requirement declared,"
+        # same "zero unless known" contract as transfer_bytes: every
+        # pre-existing placement decision is unaffected until a caller
+        # actually sets this.
+        "required_memory_gb": float(job.get("required_memory_gb", 0) or 0),
         # How many times _watchdog_loop has already requeued this job
         # after a dead worker was holding it. Without this a job whose
         # every assigned worker dies in turn would requeue forever,
@@ -549,6 +569,7 @@ def get_topology():
         name: {
             "latency_ms": topology.latency("master", name),
             "bandwidth_mbps": topology.bandwidth("master", name),
+            "free_memory_gb": topology.memory(name),
         }
         for name in names
     }

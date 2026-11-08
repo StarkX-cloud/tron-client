@@ -176,6 +176,13 @@ class PlacementDecision:
     warnings: list = field(default_factory=list)
     local_recommendation: dict | None = None  # the tron_efficiency Recommendation, if consulted
     pool_status: dict | None = None  # the PoolStatus, if consulted
+    # For a "pooled" target only: the model's estimated memory footprint in
+    # GB (see estimate_required_memory_gb below), meant to be forwarded as
+    # the job's `required_memory_gb` so tron/spine/matcher.py's memory_fits
+    # hard filter can actually keep the matcher from placing this job on a
+    # pool worker that will OOM on it. None when not computed (local/
+    # dedicated targets, or the estimate itself wasn't possible).
+    required_memory_gb: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -185,7 +192,32 @@ class PlacementDecision:
             "warnings": self.warnings,
             "local_recommendation": self.local_recommendation,
             "pool_status": self.pool_status,
+            "required_memory_gb": self.required_memory_gb,
         }
+
+
+def estimate_required_memory_gb(model_name: str, dtype: str = "fp16") -> float | None:
+    """How much memory (GB) `model_name` is estimated to need at `dtype`,
+    reusing `tron_efficiency.advisor.model_info`'s existing analytical
+    param-count estimator (config.json only, no weight download — the same
+    0.04%-validated-against-pythia-70m formula `recommend()` already uses
+    internally). Returns None, not a guessed number, when the estimate
+    isn't possible (network/config fetch failure, or an architecture the
+    formula can't read) — callers must treat that as "unknown," the same
+    "zero/None unless known" rule the rest of this placement logic follows.
+    """
+    from tron_efficiency.advisor.model_info import estimate_model_size
+
+    try:
+        estimate = estimate_model_size(model_name)
+    except Exception:
+        return None
+    if estimate.param_count == 0:
+        return None
+    bytes_needed = estimate.bytes_by_dtype.get(dtype)
+    if bytes_needed is None:
+        return None
+    return bytes_needed / 1_000_000_000.0
 
 
 def decide_placement(
@@ -320,6 +352,24 @@ def decide_placement(
             "(tron/spine/matcher.py) has little to actually optimize across"
         )
 
+    # A "pooled" target is where memory-fit actually matters -- unlike
+    # "local" (the advisor already checked this machine fits) or
+    # "dedicated" (no placement happens here at all), a pooled job is about
+    # to be handed to the matcher's cross-worker assignment, which only
+    # avoids an OOM on the wrong pool worker if it knows how much memory
+    # the job needs. dtype follows local_rec's own choice when one exists
+    # (requires_multi_node skips the local check, so there's no local_rec
+    # to read a dtype from -- fp16 is the reasonable default for that case).
+    dtype = local_rec.dtype if local_rec else "fp16"
+    required_memory_gb = estimate_required_memory_gb(job.model_name, dtype)
+    if required_memory_gb is None:
+        warnings.append(
+            f"could not estimate {job.model_name!r}'s memory footprint -- "
+            "the pooled job will be submitted without a required_memory_gb "
+            "hint, so tron/spine/matcher.py's memory-fit filter has nothing "
+            "to check it against and will place it as if memory-blind"
+        )
+
     return PlacementDecision(
         target="pooled",
         confidence=confidence,
@@ -327,4 +377,5 @@ def decide_placement(
         warnings=warnings,
         local_recommendation=local_rec.to_dict() if local_rec else None,
         pool_status=status_dict,
+        required_memory_gb=required_memory_gb,
     )

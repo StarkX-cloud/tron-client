@@ -24,6 +24,7 @@ import threading
 import time
 
 import pytest
+import requests
 import uvicorn
 
 from tron_router.decision import JobRequest, PlacementDecision
@@ -145,3 +146,40 @@ def test_a_failing_remote_function_surfaces_as_a_real_failed_job(
     worker_result = _register_and_run_one_worker_cycle(master_url, tmp_path, monkeypatch)
     assert worker_result["status"] == "error"
     assert "deliberate failure" in worker_result["error"]
+
+
+def test_required_memory_gb_from_decision_reaches_the_real_submitted_job(live_master):
+    """decide_placement computes required_memory_gb from the job's
+    model_name; this proves submit_to_pool actually forwards it all the
+    way to the real job the matcher will later see -- not just that the
+    field exists on the dataclass."""
+    master_url, qs = live_master
+    job = JobRequest(model_name="fake/model")
+    decision = PlacementDecision(target="pooled", confidence="low", required_memory_gb=12.0)
+
+    submit_to_pool(job, decision, _add, func_args=(1, 2), master_url=master_url)
+
+    assert len(qs.job_queue) == 1
+    assert qs.job_queue[0]["required_memory_gb"] == 12.0
+
+
+def test_memory_fit_filter_keeps_an_oversized_pooled_job_off_a_too_small_real_worker(
+    live_master,
+):
+    """End-to-end through a real server (not a mock): a job whose
+    decide_placement-derived required_memory_gb exceeds the only real
+    registered worker's declared capacity must never be assigned to it --
+    the honest alternative to the matcher silently placing it and letting
+    it OOM for real."""
+    master_url, qs = live_master
+    resp = requests.post(f"{master_url}/register_worker", json={"name": "small-worker", "memory_gb": 4})
+    assert resp.status_code == 200
+
+    job = JobRequest(model_name="fake/big-model")
+    decision = PlacementDecision(target="pooled", confidence="low", required_memory_gb=32.0)
+    submit_to_pool(job, decision, _add, func_args=(1, 2), master_url=master_url)
+
+    qs._run_match_cycle()
+
+    assert qs.pending_assignment == {}
+    assert len(qs.job_queue) == 1  # left unmatched, not wrongly assigned
