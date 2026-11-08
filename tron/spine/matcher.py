@@ -137,6 +137,7 @@ def score_pair(
     topology: TopologyMap,
     master_node: str = "master",
     outcome_log=None,
+    memory_aware: bool = True,
 ) -> float:
     """Same scoring logic as GlobalDecisionBrain.decide, exposed standalone
     so the matcher can build a full cost matrix without going through the
@@ -153,11 +154,19 @@ def score_pair(
     `outcome_log` is optional (a tron.orchestrator.outcomes.OutcomeLog) —
     omit it and this scores exactly as it did before outcome feedback
     existed.
+
+    `memory_aware=False` reproduces this function's exact pre-memory-fit
+    behavior (the `memory_fits` check is skipped entirely) — it exists so
+    `benchmarks/memory_aware_placement.py` can run the identical codebase
+    with the one change isolated, instead of comparing against a
+    hand-reimplemented "old" scorer that could silently drift from what
+    actually shipped before. Defaults to `True`: production code always
+    gets the real check unless a caller deliberately asks not to.
     """
     if job.get("gpu") and not worker.get("gpu"):
         return INFEASIBLE_SCORE
 
-    if not memory_fits(job, worker_name, worker, topology):
+    if memory_aware and not memory_fits(job, worker_name, worker, topology):
         return INFEASIBLE_SCORE
 
     priority = float(job.get("priority", 1))
@@ -175,6 +184,7 @@ def match_jobs_to_workers(
     topology: TopologyMap,
     master_node: str = "master",
     outcome_log=None,
+    memory_aware: bool = True,
 ) -> list[tuple[str, str]]:
     """Return (job_id, worker_name) pairs forming the assignment that
     maximizes total score across all pairs simultaneously. Leftover jobs
@@ -185,6 +195,11 @@ def match_jobs_to_workers(
     `outcome_log` is optional — pass a tron.orchestrator.outcomes.OutcomeLog
     to let nodes' real training track records bias placement alongside the
     measured latency/bandwidth terms; omit it for topology-only scoring.
+
+    `memory_aware=False` disables the `memory_fits` hard filter in every
+    pair's score — see `score_pair`'s docstring. Only meant for
+    `benchmarks/memory_aware_placement.py`'s baseline comparison; real
+    callers always want the default.
     """
     if not jobs or not idle_workers:
         return []
@@ -198,7 +213,7 @@ def match_jobs_to_workers(
         for j, worker_name in enumerate(worker_names):
             score = score_pair(
                 job, worker_name, idle_workers[worker_name], topology, master_node,
-                outcome_log=outcome_log,
+                outcome_log=outcome_log, memory_aware=memory_aware,
             )
             cost[i, j] = -score  # linear_sum_assignment minimizes; we want to maximize score
 
