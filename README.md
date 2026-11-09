@@ -537,6 +537,21 @@ fits experiment across genuinely separate machines (the kind already done
 for network placement in the Linode pooling work) is the natural next
 step, not yet done.
 
+**Follow-up fixed right after this merged:** this benchmark's own PR, and
+the one before it, both had to merge with an admin override because two
+unrelated integration tests (`test_pool_reliability.py`,
+`test_router_handoff.py`) intermittently failed CI. Root cause: both
+start a live uvicorn server thread in-process, then call
+`worker.execute_job` directly in that same process — and `execute_job`'s
+real subprocess-isolation guardrail forks on Linux, which is unsafe from
+a multi-threaded process (an inherited stuck lock can hang the forked
+child until the 300s job timeout kills it). Fixed by forcing those two
+tests' worker setup into the same in-process fallback `worker.py` already
+uses where no fork start method exists — a test-harness-only change, real
+deployed workers are never multi-threaded before they fork. The fix's own
+PR (#5) was the first in this project's recent run to go fully green
+without an override. See ROADMAP.md for the full root-cause writeup.
+
 ## Cost trace (`tron_costtrace/`)
 
 A new, separate, standalone package — zero coupling to `tron/`,

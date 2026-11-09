@@ -1168,3 +1168,44 @@ technical design behind each phase.
   multi-node OOM-vs-fits experiment across genuinely separate machines —
   the kind already done for network placement in the Linode pooling
   work — is the natural next step, not yet done.
+
+- [x] **Fixed a real, previously-misdiagnosed CI flake: `worker.py`
+  forking after test threads start** (merged
+  `fix/worker-fork-after-threads-deadlock`, #5). PRs #3 and #4 both had
+  to merge with an admin override because `test_pool_reliability.py`
+  and `test_router_handoff.py` intermittently failed in CI with
+  `TimeoutError: job exceeded TRON_JOB_TIMEOUT_SECONDS=300.0s` — logged
+  before this as generic flakiness. Root cause, found by actually
+  reading the failure instead of re-running and hoping: both tests
+  start a real uvicorn server thread (and, in the pool-reliability
+  case, the watchdog thread) in-process, then call `worker.execute_job`
+  directly in that same process. `execute_job`'s real subprocess-
+  isolation guardrail (added during the Linode validation work above)
+  forks via `multiprocessing.get_context("fork")` on Linux — and
+  forking a multi-threaded process is unsafe: a lock another thread
+  held at fork time can be inherited in a stuck state, hanging the
+  forked child until the real 300s timeout kills it. Not random
+  flakiness — a deterministic hazard with a narrow, thread-scheduling-
+  dependent window, which is why it never reproduced on this Windows
+  dev machine (no fork start method at all) and only showed up on CI
+  intermittently.
+  **Fix:** force `worker._MP_CONTEXT = None` in both tests' worker-setup
+  helpers — the same in-process fallback `worker.py` already uses on
+  platforms with no fork start method. Test-harness-only: no real
+  deployed worker is multi-threaded before it forks a job, so
+  production behavior is unaffected, and the subprocess guardrail
+  feature itself keeps its own dedicated, thread-free coverage in
+  `test_worker_job_guardrail.py`.
+  **Considered and rejected:** switching to `"forkserver"` globally —
+  it avoids the same hazard, but ships the target callable to its
+  helper process over a pipe using stdlib pickle, the same limitation
+  `"spawn"` has and the exact reason this project uses `"fork"` in the
+  first place (a cloudpickle-deserialized closure often can't be
+  re-pickled by stdlib pickle). That would have reintroduced the bug
+  `execute_job`'s own docstring already explains `"fork"` exists to
+  avoid.
+  **Real result:** PR #5's own CI run was the first in this project's
+  recent history to go fully green without an admin override — 377
+  passed, 3 skipped, 0 failed, including both previously-flaky files
+  and the test that had been intermittently flaky in an unrelated way
+  (`test_costtrace_tracer.py::test_latency_is_measured`).
