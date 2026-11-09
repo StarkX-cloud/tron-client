@@ -77,6 +77,16 @@ def _new_worker(master_url, tmp_path, monkeypatch, name):
     monkeypatch.setenv("TRON_AUTH_TOKEN_FILE", str(tmp_path / f"{name}_auth.json"))
     import worker
     importlib.reload(worker)
+    # Same fork-after-threads hazard as test_router_handoff.py: this
+    # process already has live_master_with_watchdog's uvicorn + watchdog
+    # threads running, and forking from a multi-threaded process can
+    # inherit a stuck lock, hanging the child until JOB_TIMEOUT_SECONDS
+    # kills it -- a test-harness hazard, not a production one (see the
+    # comment at the other call site for the full explanation). Force
+    # the same in-process fallback worker.py uses when no fork start
+    # method exists; the subprocess guardrail has its own thread-free
+    # coverage in test_worker_job_guardrail.py.
+    worker._MP_CONTEXT = None
     auth_token = worker.register_worker()
     return worker, auth_token
 

@@ -74,6 +74,18 @@ def _register_and_run_one_worker_cycle(master_url, tmp_path, monkeypatch):
     monkeypatch.setenv("TRON_AUTH_TOKEN_FILE", str(tmp_path / "worker_auth.json"))
     import worker
     importlib.reload(worker)
+    # This test process already has live_master's uvicorn server thread
+    # running. worker.execute_job's real subprocess-isolation path forks
+    # -- forking a multi-threaded process can inherit another thread's
+    # held lock in a stuck state, so the forked child can hang until
+    # JOB_TIMEOUT_SECONDS kills it, surfacing as a spurious TimeoutError
+    # instead of the job's real result (seen as CI flakiness). No real
+    # deployed worker is multi-threaded before it forks, so this is a
+    # test-harness hazard, not a production one; the subprocess guardrail
+    # itself has its own dedicated, thread-free coverage in
+    # test_worker_job_guardrail.py. Force the same in-process fallback
+    # worker.py already uses on platforms with no fork start method.
+    worker._MP_CONTEXT = None
 
     auth_token = worker.register_worker()
     job = worker.fetch_next_job(auth_token)
