@@ -552,6 +552,24 @@ deployed workers are never multi-threaded before they fork. The fix's own
 PR (#5) was the first in this project's recent run to go fully green
 without an override. See ROADMAP.md for the full root-cause writeup.
 
+**A second, more consequential gap found the same way — in `@tron.remote`
+itself, the decorator shown at the top of this README:** calling
+`@remote(memory_gb=64)` only ever set `queue_server.py`'s `min_memory_gb`
+field, which its own code comment admits is "a soft scheduling weight,
+not a correctness constraint" — never checked against a worker's real
+capacity. The actual hard filter (`memory_fits`, the one this section's
+benchmark validated) only ever got reached through `tron_router`'s
+model-name-based estimate — a path `@remote` can never take, since it
+wraps arbitrary functions with no model name at all. A developer calling
+the one entrypoint this project's own README leads with, saying "this
+needs 64GB," got no real guarantee of that. Fixed in `tron/remote.py`:
+a caller-supplied `memory_gb` hint now also sets `required_memory_gb` in
+the submit payload, so it's enforced by the real matcher, not just a
+scheduling nudge — the one resource hint most developers would actually
+give this decorator now means what it reads like it means. Previously
+untested entirely; `tests/test_remote_decorator.py` is now this
+decorator's first real coverage.
+
 ## Cost trace (`tron_costtrace/`)
 
 A new, separate, standalone package — zero coupling to `tron/`,

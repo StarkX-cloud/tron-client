@@ -1209,3 +1209,42 @@ technical design behind each phase.
   passed, 3 skipped, 0 failed, including both previously-flaky files
   and the test that had been intermittently flaky in an unrelated way
   (`test_costtrace_tracer.py::test_latency_is_measured`).
+
+- [x] **Closed a real gap in `@tron.remote` itself — the flagship
+  entrypoint, never tested before this, didn't actually enforce the one
+  resource hint developers would give it.** Direction set by the user:
+  stop treating this project as "a GPU cost optimizer" and push toward
+  letting a developer just express what they need and have the system
+  honor it, rather than silently ignoring it. Auditing `tron/remote.py`
+  against that bar surfaced a concrete miss: `@remote(memory_gb=64)`
+  set `queue_server.py`'s `min_memory_gb` field, which that file's own
+  code comment already calls "a soft scheduling weight, not a
+  correctness constraint" — it never reaches `tron/spine/matcher.py`'s
+  `memory_fits` hard filter, the real mechanism this project built and
+  benchmarked above specifically to stop a job from being placed where
+  it can't fit. That hard filter was only ever reachable through
+  `tron_router`'s model-name-based estimate (`decide_placement`) — a
+  path `@remote` structurally can't take, since it wraps arbitrary
+  Python functions with no model name. A developer telling TRON's own
+  flagship decorator "this needs 64GB" got no actual guarantee of that.
+  **Fix:** `tron/remote.py` now also forwards a caller's `memory_gb`
+  hint as `required_memory_gb` in the `/submit` payload — the existing
+  hard filter picks it up with no change to `queue_server.py` or the
+  matcher needed. `min_memory_gb`'s existing soft-weight behavior is
+  untouched (both fields are set now, not one replacing the other).
+  4 new tests in `tests/test_remote_decorator.py` — this decorator's
+  first test coverage of any kind — confirming the hint reaches the
+  payload from both decorator-time and call-time, that omitting it
+  changes nothing (zero-unless-known), and that `local_only` still
+  never touches the network.
+  **Honest scope:** this closes the memory-feasibility half of "a
+  developer shouldn't have to think about this." It does not make
+  `@remote` consult `tron_router.decide_placement` for a real local-
+  vs-pooled-vs-dedicated decision (today it still always tries local
+  first by default, regardless of whether the pool would be cheaper or
+  the job even fits) — `decide_placement` is inherently model-name-
+  shaped and can't reason about an arbitrary function's resource needs
+  the way it does for a named HF model. Making `@remote` itself
+  pool-aware for arbitrary functions, and surfacing real cost/economics
+  back to the caller, is the natural next step toward "express intent,
+  not placement" — not done here.

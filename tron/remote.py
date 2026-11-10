@@ -83,6 +83,24 @@ def remote(fn=None, local_first: bool = True, **default_resources):
                 "min_memory_gb": resources.get("memory_gb", 1),
                 "priority": resources.get("priority", 1),
             }
+            # A caller writing `memory_gb=64` reads, by every reasonable
+            # expectation, as "this job needs 64GB" -- but queue_server.py's
+            # `min_memory_gb` (what the line above sets) is documented as a
+            # soft scheduling weight only, never checked against a worker's
+            # real capacity (see queue_server.py's /submit, "memory_gb ...
+            # is a soft scheduling weight, not a correctness constraint").
+            # The real hard filter -- tron/spine/matcher.py's memory_fits,
+            # the one this project built and benchmarked to actually prevent
+            # OOM placements -- only ever gets reached through tron_router's
+            # model-name-based estimate (decide_placement). @remote wraps
+            # arbitrary functions with no model name, so that path can never
+            # apply here -- but a caller-supplied number is real information
+            # this decorator was silently discarding. Forward it as
+            # required_memory_gb too, so the one resource hint a developer
+            # actually gives this decorator is an enforced guarantee, not
+            # just a nudge.
+            if "memory_gb" in resources:
+                submit_payload["required_memory_gb"] = resources["memory_gb"]
 
             try:
                 r = requests.post(
