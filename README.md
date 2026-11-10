@@ -570,6 +570,18 @@ give this decorator now means what it reads like it means. Previously
 untested entirely; `tests/test_remote_decorator.py` is now this
 decorator's first real coverage.
 
+**Same decorator, the other half of the same gap:** `@remote(gpu=True)`
+on a machine with no GPU would still just run the function locally —
+whatever that means for code written assuming a GPU exists — and call it
+a success, silently ignoring the one thing the caller declared, unless
+the function happened to crash on its own. `@remote` now checks a
+declared `gpu`/`memory_gb` hint against this process's real detected
+hardware before attempting local execution at all (reusing
+`tron_efficiency.hardware.detect`, not a second probe); when it's
+provably infeasible, it skips straight to the remote/pool path and
+prints exactly why. An explicit `local_only=True` is untouched — that's
+the caller overriding this on purpose. 11 tests total now.
+
 ## Cost trace (`tron_costtrace/`)
 
 A new, separate, standalone package — zero coupling to `tron/`,
