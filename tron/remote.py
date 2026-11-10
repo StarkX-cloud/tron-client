@@ -9,6 +9,46 @@ from .config import get_config
 from .magic_future import MagicFuture
 
 
+def _local_hardware_can_satisfy(requires_gpu: bool, required_memory_gb) -> tuple[bool, str | None]:
+    """Can *this* literal process's real detected hardware actually meet
+    a caller's declared gpu/memory_gb hint? Returns (True, None) when
+    satisfiable or nothing was declared to check -- "zero unless known,"
+    same contract as the required_memory_gb forwarding below.
+
+    Without this, `@remote(gpu=True)` on a machine with no GPU would
+    still just run the function locally if it didn't happen to crash --
+    silently violating the one thing the caller actually asked for,
+    the same class of gap `required_memory_gb` forwarding closed for the
+    remote path. This is deliberately the only consumer of
+    `tron_efficiency.hardware.detect` from this file -- reusing the real
+    probe already built for the advisor, not inventing a second one.
+    """
+    if not requires_gpu and required_memory_gb is None:
+        return True, None
+
+    from tron_efficiency.hardware.detect import detect_hardware
+
+    hardware = detect_hardware()
+
+    if requires_gpu and not hardware.gpus:
+        return False, "gpu=True requested but this machine has no detected GPU"
+
+    if required_memory_gb is not None:
+        if requires_gpu and hardware.gpus:
+            available_bytes = max(gpu.total_memory_bytes for gpu in hardware.gpus)
+        else:
+            available_bytes = hardware.cpu_total_memory_bytes
+        if available_bytes is not None:
+            available_gb = available_bytes / 1_000_000_000.0
+            if required_memory_gb > available_gb:
+                return False, (
+                    f"memory_gb={required_memory_gb} requested but this machine reports only "
+                    f"{available_gb:.1f}GB available"
+                )
+
+    return True, None
+
+
 def remote(fn=None, local_first: bool = True, **default_resources):
     """
     @remote decorator - Make any function distributed with zero changes.
@@ -44,6 +84,21 @@ def remote(fn=None, local_first: bool = True, **default_resources):
 
             # Determine execution strategy
             should_try_local = local_only or (local_first and not remote_only)
+
+            # A declared gpu/memory_gb hint gates the *default* local
+            # attempt against this machine's real hardware -- an explicit
+            # local_only still always tries (and still raises clearly
+            # below if it genuinely fails), since that's the caller
+            # overriding this decision on purpose, not asking for it.
+            if should_try_local and not local_only:
+                requires_gpu = bool(resources.get("gpu", False))
+                required_memory_gb = resources.get("memory_gb") if "memory_gb" in resources else None
+                can_run_locally, infeasible_reason = _local_hardware_can_satisfy(
+                    requires_gpu, required_memory_gb
+                )
+                if not can_run_locally:
+                    should_try_local = False
+                    print(f"[TRON] Skipping local execution for {func.__name__}: {infeasible_reason}")
 
             # Try local execution if enabled
             if should_try_local:

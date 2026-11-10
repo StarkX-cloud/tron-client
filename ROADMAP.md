@@ -1248,3 +1248,42 @@ technical design behind each phase.
   pool-aware for arbitrary functions, and surfacing real cost/economics
   back to the caller, is the natural next step toward "express intent,
   not placement" — not done here.
+
+- [x] **Closed the other half of the same gap: `@remote`'s local
+  attempt never checked whether this machine could actually satisfy a
+  declared `gpu`/`memory_gb` hint before running.** Found while auditing
+  `tron/remote.py` further against "developer expresses what they
+  need." The prior fix made a hint real for the *remote* path
+  (`required_memory_gb`); the *local* path still had the identical
+  problem in miniature: `@remote(gpu=True)` on a machine with no GPU
+  would still just call the function locally and "succeed" (whatever
+  that means for code that assumed a GPU would be present), silently
+  ignoring the one thing the caller declared, unless the function
+  happened to crash on its own.
+  **Fix:** `tron/remote.py`'s `_local_hardware_can_satisfy` checks a
+  declared `gpu`/`memory_gb` hint against this process's real detected
+  hardware (`tron_efficiency.hardware.detect.detect_hardware` — reusing
+  the advisor's existing real probe, not a second one) before the
+  default local attempt. When it's provably infeasible (no GPU
+  detected, or the hint exceeds this machine's reported memory), the
+  decorator skips straight to the remote/pool path instead of running
+  on hardware that can't honor what was asked, and prints a one-line
+  `[TRON] Skipping local execution for ...` explaining why. An explicit
+  `local_only=True` is left untouched — that's the caller overriding
+  this decision on purpose, so it still always tries, and still raises
+  clearly on a real failure, same as before.
+  7 new tests in `tests/test_remote_decorator.py` (now 11 total for a
+  decorator that had zero coverage two commits ago): the gate function
+  in isolation (gpu-present/absent, memory within/beyond capacity), and
+  two end-to-end decorator cases proving a real `gpu=True` mismatch
+  skips local and falls through to remote, while a satisfiable hint
+  still runs locally exactly as before.
+  **Honest scope:** this is a hardware-presence/capacity check, not a
+  real resource reservation or sandboxing — it can't catch a job that
+  fits by this estimate but still fails for an unrelated reason (disk
+  space, a missing driver version, contention from another process
+  using the same GPU). It also doesn't yet make the remote/pool path
+  itself smarter about *which* target to pick when local is skipped —
+  `@remote` still just submits to whatever single master
+  `config.ensure_server()` resolves, with no real local-vs-pooled-vs-
+  dedicated economics decision. That's still the next real step.
