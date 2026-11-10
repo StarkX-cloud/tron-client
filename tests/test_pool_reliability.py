@@ -119,14 +119,30 @@ def test_a_dead_workers_job_is_requeued_and_finished_by_another_real_worker(
 
     # Wait past HEARTBEAT_TIMEOUT_SECONDS (shrunk to 1.0s) plus the
     # watchdog's own 5s poll interval for it to actually notice and act.
+    # worker_status_when_requeued is read under the SAME lock acquisition
+    # as back_in_queue, not a separate one afterward -- _watchdog_loop
+    # marks a dead worker offline *before* requeuing its orphaned jobs
+    # (queue_server.py's _watchdog_loop), so this proves the real
+    # ordering guarantee, not just "eventually both become true." Before
+    # that fix, these two facts were set in two separate lock sections in
+    # the opposite order, which intermittently failed in real CI (the job
+    # was observably back in the queue while the worker still read
+    # "busy") even though it almost always passed locally.
     deadline = time.time() + 15
+    back_in_queue = False
+    worker_status_when_requeued = None
     while time.time() < deadline:
         with qs.lock:
             back_in_queue = any(j["id"] == job_id for j in qs.job_queue)
+            worker_status_when_requeued = qs.workers["worker-doomed"]["status"]
         if back_in_queue:
             break
         time.sleep(0.25)
     assert back_in_queue, "watchdog never requeued the dead worker's job"
+    assert worker_status_when_requeued == "offline", (
+        "the job was back in the queue before the worker was marked offline -- "
+        f"worker status was {worker_status_when_requeued!r} at that exact moment"
+    )
 
     with qs.lock:
         assert qs.job_store[job_id]["status"] == "queued"

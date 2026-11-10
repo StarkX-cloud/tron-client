@@ -1173,6 +1173,19 @@ def _watchdog_loop():
             ]
 
         for worker_name in dead:
+            # Mark the worker offline *before* requeuing its orphaned
+            # jobs, not after. recover_orphaned_tasks reads the event
+            # log's own task state, not workers[worker_name]["status"],
+            # so this order has no effect on which tasks get recovered --
+            # but it closes a real, previously-unnoticed window where a
+            # job was already observably back in the queue while the
+            # worker it was recovered from still read "busy" (found via a
+            # genuine, if intermittent, CI failure in
+            # tests/test_pool_reliability.py, not a hypothetical).
+            with lock:
+                if worker_name in workers:
+                    workers[worker_name]["status"] = "offline"
+
             orphaned = event_log.recover_orphaned_tasks(worker_name)
             for task in orphaned:
                 job_id = task.task_id
@@ -1206,9 +1219,6 @@ def _watchdog_loop():
                     })
                 else:
                     event_log.append(job_id, "requeued", {"reason": "node_timeout", "dead_node": worker_name})
-            with lock:
-                if worker_name in workers:
-                    workers[worker_name]["status"] = "offline"
 
 # =========================
 # STREAM

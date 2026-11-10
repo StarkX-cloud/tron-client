@@ -1287,3 +1287,31 @@ technical design behind each phase.
   `@remote` still just submits to whatever single master
   `config.ensure_server()` resolves, with no real local-vs-pooled-vs-
   dedicated economics decision. That's still the next real step.
+
+- [x] **Found and fixed a real, previously-unnoticed ordering gap in
+  `queue_server.py`'s `_watchdog_loop`, surfaced by a genuine
+  intermittent CI failure (not a hypothetical).** PR #8's own CI run
+  failed `test_pool_reliability.py::test_a_dead_workers_job_is_requeued_and_finished_by_another_real_worker`
+  with `AssertionError: assert 'busy' == 'offline'` — a test unrelated
+  to that PR's actual diff. Reading `_watchdog_loop` instead of assuming
+  a timing-margin flake found the real cause: for each dead worker, it
+  requeued every one of that worker's orphaned jobs *first*, and only
+  afterward, in a separate lock section, marked the worker `"offline"`.
+  `recover_orphaned_tasks` reads the event log's own task state, not
+  `workers[name]["status"]`, so this order was never load-bearing for
+  correctness — it just left a real window where a job was already
+  observably back in the queue while the worker it came from still read
+  `"busy"`, wide enough to show up on a slower/busier CI runner.
+  **Fix:** mark the worker offline *before* processing its orphaned
+  jobs, not after — a one-block reorder, no new logic. Strengthened
+  `test_pool_reliability.py` to actually prove the ordering guarantee
+  (reads the worker's status under the same lock acquisition as the
+  queue check, not a separate one afterward) instead of just happening
+  to usually pass. Full suite: 388 passed, 5 skipped, 0 failed.
+  **Pattern worth naming:** this is the third CI failure this session
+  chased to a real, specific root cause instead of accepting as generic
+  flakiness (after the fork-after-threads deadlock and the `@remote`
+  gaps) — each time the "flake" turned out to be a real bug with a
+  narrow, load-dependent window, not noise. Worth treating any future
+  intermittent failure the same way before reaching for a longer
+  timeout or an admin override as the fix.
