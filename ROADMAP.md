@@ -338,6 +338,15 @@ technical design behind each phase.
   `scripts/distributed_multi_machine_proof.py`. Write-up:
   `writeup/distributed-execution-engine-v1.md`. Does **not** claim
   tensor/pipeline parallel or distributed VRAM.
+- [x] **Adaptive Compute Intelligence (`tron_adaptive/`):** predicted →
+  actual → updated optimization decisions via `PerformanceStore` +
+  `AdaptiveOptimizer` (memory policy, dtype/quantization, batching,
+  CPU/GPU hetero, distributed when cost model agrees). Benchmark:
+  `benchmarks/adaptive_compute.py` optimized vs unoptimized with
+  successes/hour, cost/success, peak GPU mem, GPU util, throughput,
+  completion, comm overhead, failure/recovery. Artifacts under
+  `artifacts/adaptive_compute_*.json`. Write-up:
+  `writeup/adaptive-compute-intelligence.md`. No unified-VRAM claim.
 - [x] `tron/gpu/` OpenAI-compatible gateway now has `tron/gpu/README.md`
   documenting the `tron.gpu.*` layout (cluster / runtime / scheduler /
   openai_bridge), how to run the bridge (with the mocked-proxy test

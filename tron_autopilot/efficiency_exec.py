@@ -40,11 +40,12 @@ def workload_config_from_plan(plan: WorkloadPlan) -> WorkloadConfig:
     spec = plan.spec
     device = chosen.device or "cpu"
     # Never claim CUDA when the candidate said cpu; never silently upgrade.
+    batch = max(1, int(getattr(spec, "batch_size", 1) or 1))
     return WorkloadConfig(
         model_name=spec.model_name,
         prompt=spec.prompt,
         max_new_tokens=int(spec.max_new_tokens),
-        batch_size=1,
+        batch_size=batch,
         device=device,
         dtype=chosen.dtype,
     )
@@ -138,11 +139,21 @@ def run_efficiency_workload(plan: WorkloadPlan, strategy: str = "autopilot") -> 
         # via success=False so cost/success metrics exclude it.
         actual_cost = cost_from_runtime(chosen.hourly_rate_usd, runtime)
 
+    gpu_util = None
+    try:
+        from tron_adaptive.metrics import sample_gpu_utilization
+
+        if config.device == "cuda":
+            gpu_util = sample_gpu_utilization()
+    except Exception:  # noqa: BLE001
+        gpu_util = None
+
     metrics = {
         "workload": "tron_efficiency.run_workload",
         "policy_name": outcome.policy_name,
         "device": config.device,
         "dtype": config.dtype,
+        "batch_size": config.batch_size,
         "load_time_seconds": outcome.load_time_seconds,
         "time_to_first_token_seconds": outcome.time_to_first_token_seconds,
         "end_to_end_latency_seconds": outcome.end_to_end_latency_seconds,
@@ -151,12 +162,14 @@ def run_efficiency_workload(plan: WorkloadPlan, strategy: str = "autopilot") -> 
         "peak_cpu_memory_bytes": outcome.peak_cpu_memory_bytes,
         "peak_gpu_memory_allocated_bytes": outcome.peak_gpu_memory_allocated_bytes,
         "peak_gpu_memory_reserved_bytes": outcome.peak_gpu_memory_reserved_bytes,
+        "gpu_utilization_percent": gpu_util,
         "wall_clock_seconds": wall,
         "runtime_basis": (
             "load+e2e" if measured is not None else "wall_clock_fallback"
         ),
         "device_map": outcome.device_map,
         "cuda_claimed": False,  # this module never claims CUDA without config.device
+        "adaptive_mode": getattr(plan.spec, "adaptive_mode", None),
     }
 
     return ExecutionOutcome(

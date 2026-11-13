@@ -1,0 +1,189 @@
+{
+  "benchmark": "adaptive_compute_optimized_vs_unoptimized",
+  "model": "synthetic/adaptive",
+  "real_model": false,
+  "trials_per_mode": 3,
+  "hardware": {
+    "cuda_available": false,
+    "cpu_count": 4,
+    "cpu_total_memory_bytes": 16780623872,
+    "gpus": []
+  },
+  "modes": {
+    "unoptimized": {
+      "label": "unoptimized",
+      "total_runs": 3,
+      "successes": 3,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "successes_per_hour": 11246.636915824634,
+      "cost_per_successful_usd": 1.1250638657555908e-05,
+      "peak_gpu_memory_bytes": null,
+      "peak_cpu_memory_bytes": 581832704.0,
+      "gpu_utilization_percent": null,
+      "throughput_tokens_per_second": null,
+      "avg_completion_seconds": 0.08100459833440254,
+      "total_wall_seconds": 0.9602870689996053,
+      "communication_overhead_seconds": null,
+      "recovery_rate": null,
+      "notes": [
+        "peak GPU memory unavailable (CPU-only or not reported)",
+        "GPU utilization unavailable (no NVML/CUDA sampler)",
+        "communication overhead not measured for this path",
+        "independent GPUs are NOT claimed as one unified VRAM pool"
+      ],
+      "profiles": [
+        {
+          "mode": "unoptimized",
+          "policy_override": "baseline",
+          "dtype_override": "fp32",
+          "device_override": "cpu",
+          "batch_size": 1,
+          "enable_distributed": false,
+          "max_parallel_workers": null,
+          "memory_budget_bytes": null,
+          "rationale": [
+            "unoptimized baseline: baseline policy, fp32, batch_size=1, no distributed partitioning"
+          ],
+          "tradeoffs": [
+            "maximum simplicity; may OOM on tight memory or under-use GPU",
+            "no quantization \u2014 higher memory, often higher CPU quality"
+          ]
+        },
+        {
+          "mode": "unoptimized",
+          "policy_override": "baseline",
+          "dtype_override": "fp32",
+          "device_override": "cpu",
+          "batch_size": 1,
+          "enable_distributed": false,
+          "max_parallel_workers": null,
+          "memory_budget_bytes": null,
+          "rationale": [
+            "unoptimized baseline: baseline policy, fp32, batch_size=1, no distributed partitioning"
+          ],
+          "tradeoffs": [
+            "maximum simplicity; may OOM on tight memory or under-use GPU",
+            "no quantization \u2014 higher memory, often higher CPU quality"
+          ]
+        },
+        {
+          "mode": "unoptimized",
+          "policy_override": "baseline",
+          "dtype_override": "fp32",
+          "device_override": "cpu",
+          "batch_size": 1,
+          "enable_distributed": false,
+          "max_parallel_workers": null,
+          "memory_budget_bytes": null,
+          "rationale": [
+            "unoptimized baseline: baseline policy, fp32, batch_size=1, no distributed partitioning"
+          ],
+          "tradeoffs": [
+            "maximum simplicity; may OOM on tight memory or under-use GPU",
+            "no quantization \u2014 higher memory, often higher CPU quality"
+          ]
+        }
+      ]
+    },
+    "optimized": {
+      "label": "optimized",
+      "total_runs": 3,
+      "successes": 3,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "successes_per_hour": 12857.77138788675,
+      "cost_per_successful_usd": 1.1167843287222677e-05,
+      "peak_gpu_memory_bytes": null,
+      "peak_cpu_memory_bytes": 582533120.0,
+      "gpu_utilization_percent": null,
+      "throughput_tokens_per_second": null,
+      "avg_completion_seconds": 0.08040847166800329,
+      "total_wall_seconds": 0.8399589379987447,
+      "communication_overhead_seconds": null,
+      "recovery_rate": null,
+      "notes": [
+        "peak GPU memory unavailable (CPU-only or not reported)",
+        "GPU utilization unavailable (no NVML/CUDA sampler)",
+        "communication overhead not measured for this path",
+        "independent GPUs are NOT claimed as one unified VRAM pool"
+      ],
+      "profiles": [
+        {
+          "mode": "optimized",
+          "policy_override": "baseline",
+          "dtype_override": "fp32",
+          "device_override": "cpu",
+          "batch_size": 1,
+          "enable_distributed": false,
+          "max_parallel_workers": null,
+          "memory_budget_bytes": null,
+          "rationale": [
+            "no CUDA \u2014 CPU execution (honest hetero fallback)",
+            "performance history best key: synthetic/adaptive|local|baseline|cpu|fp32|b1",
+            "adopting measured best policy/device/dtype/batch from history",
+            "single item \u2014 batch_size=1"
+          ],
+          "tradeoffs": []
+        },
+        {
+          "mode": "optimized",
+          "policy_override": "baseline",
+          "dtype_override": "fp32",
+          "device_override": "cpu",
+          "batch_size": 1,
+          "enable_distributed": false,
+          "max_parallel_workers": null,
+          "memory_budget_bytes": null,
+          "rationale": [
+            "no CUDA \u2014 CPU execution (honest hetero fallback)",
+            "performance history best key: synthetic/adaptive|local|baseline|cpu|fp32|b1",
+            "adopting measured best policy/device/dtype/batch from history",
+            "single item \u2014 batch_size=1"
+          ],
+          "tradeoffs": []
+        },
+        {
+          "mode": "optimized",
+          "policy_override": "baseline",
+          "dtype_override": "fp32",
+          "device_override": "cpu",
+          "batch_size": 1,
+          "enable_distributed": false,
+          "max_parallel_workers": null,
+          "memory_budget_bytes": null,
+          "rationale": [
+            "no CUDA \u2014 CPU execution (honest hetero fallback)",
+            "performance history best key: synthetic/adaptive|local|baseline|cpu|fp32|b1",
+            "adopting measured best policy/device/dtype/batch from history",
+            "single item \u2014 batch_size=1"
+          ],
+          "tradeoffs": []
+        }
+      ]
+    }
+  },
+  "tradeoffs": {
+    "unoptimized": [
+      "maximum simplicity; may OOM on tight memory or under-use GPU",
+      "no quantization \u2014 higher memory, often higher CPU quality"
+    ],
+    "optimized": []
+  },
+  "delta": {
+    "completion_time_ratio_opt_over_unopt": 0.9926408293028214,
+    "cost_per_success_ratio_opt_over_unopt": 0.9926408293028213,
+    "successes_per_hour_ratio_opt_over_unopt": 1.1432547777722923,
+    "throughput_ratio_opt_over_unopt": null
+  },
+  "warmup": null,
+  "honesty": [
+    "Same workload and host for both modes.",
+    "Unoptimized = fixed baseline/fp32/batch=1.",
+    "Optimized = advisor + measured performance history + batch/device levers.",
+    "Real-model runs share a discarded warmup to avoid cold-cache bias.",
+    "Does not claim unified VRAM across independent GPUs.",
+    "GPU util / peak VRAM are None when CUDA/NVML unavailable."
+  ],
+  "performance_store_samples": 6
+}

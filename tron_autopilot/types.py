@@ -40,6 +40,8 @@ class WorkloadSpec:
     # Efficiency-workload knobs (used when executing via tron_efficiency).
     prompt: str = "The quick brown fox jumps over the lazy dog, and"
     max_new_tokens: int = 32
+    batch_size: int = 1
+    max_batch_size: int = 8
     # When True, pooled candidates require workers that advertised
     # efficiency_runtime (torch/transformers/accelerate).
     requires_efficiency_runtime: bool = False
@@ -55,6 +57,12 @@ class WorkloadSpec:
     bytes_per_item: float = 64.0
     # Prefer distributed when requires_multi_node even if cost model is unsure
     # only when worth_it — still never force inefficient parallelization.
+    # Adaptive Compute Intelligence (Prompt 3) — optional lever overrides
+    # produced by tron_adaptive.Optimizer; None means advisor/Autopilot default.
+    force_policy: str | None = None
+    force_dtype: str | None = None
+    force_device: str | None = None
+    adaptive_mode: str | None = None  # "optimized" | "unoptimized" | None
 
     def to_dict(self) -> dict:
         return asdict(self)

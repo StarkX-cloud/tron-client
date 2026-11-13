@@ -123,6 +123,21 @@ class EconomicAutopilot:
                 warnings=["advisor/recommend raised — using CPU baseline fallback, not a fabricated fit"],
             )
 
+        # Adaptive Compute Intelligence lever overrides (measured-profile driven).
+        if spec.force_policy or spec.force_dtype or spec.force_device:
+            local_rec = replace(
+                local_rec,
+                policy=spec.force_policy or local_rec.policy,
+                dtype=spec.force_dtype or local_rec.dtype,
+                device=spec.force_device or local_rec.device,
+                rationale=list(local_rec.rationale)
+                + [
+                    "adaptive overrides applied: "
+                    f"policy={spec.force_policy!r} dtype={spec.force_dtype!r} "
+                    f"device={spec.force_device!r} mode={spec.adaptive_mode!r}"
+                ],
+            )
+
         candidates = self._build_candidates(spec, local_rec, status, placement)
         chosen = self._select(candidates, strategy=strategy, spec=spec)
 
