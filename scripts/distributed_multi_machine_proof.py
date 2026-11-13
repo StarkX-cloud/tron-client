@@ -216,15 +216,18 @@ def run_distributed_on_master(key: Path, host: str) -> dict:
     remote = "/tmp/dist_proof_driver.py"
     driver = f'''
 import json, time
+from dataclasses import replace
+from tron_efficiency.advisor.recommend import Recommendation
+from tron_efficiency.hardware.detect import HardwareInfo
+from tron_router.decision import PlacementDecision, query_pool_status
 from tron_autopilot.engine import EconomicAutopilot
 from tron_autopilot.execute import execute_plan
 from tron_autopilot.types import WorkloadSpec
 from tron_autopilot.distributed.ops import closed_form_sum_squares
-from tron_router.decision import query_pool_status
+from tron_autopilot.store import RuntimeHistory
 
 master = "http://127.0.0.1:9000"
-# Wait until 2 alive workers
-deadline = time.time() + 120
+deadline = time.time() + 180
 status = None
 while time.time() < deadline:
     status = query_pool_status(master)
@@ -237,16 +240,54 @@ else:
 
 n = {N_ITEMS}
 items = list(range(n))
-# Seed history so cost model can prefer distributed
+serial = 30.0
+
+rec = Recommendation(
+    model_name="dist/proof",
+    estimated_param_count=1000,
+    param_count_is_estimate=True,
+    device="cpu",
+    dtype="fp32",
+    policy="baseline",
+    memory_budget_bytes=None,
+    confidence="medium",
+    rationale=["dist proof stub — no HF download"],
+    warnings=[],
+)
+hw = HardwareInfo(
+    platform="linux",
+    python_version="3.10",
+    cpu_count=1,
+    cpu_total_memory_bytes=1 * 1024**3,
+    cuda_available=False,
+    torch_version=None,
+    gpus=[],
+    warnings=[],
+)
+
+def recommend_fn(*a, **k):
+    return rec
+
+def decide_fn(job, hardware=None, pool_status=None, master_url=None):
+    return PlacementDecision(
+        target="pooled",
+        confidence="medium",
+        rationale=["dist proof"],
+        local_recommendation=rec.to_dict(),
+        pool_status=status.to_dict(),
+        required_memory_gb=0.25,
+    )
+
 ap = EconomicAutopilot(
     log_path="/tmp/dist_decisions.jsonl",
     history_path="/tmp/dist_history.json",
+    hardware=hw,
+    recommend_fn=recommend_fn,
+    decide_placement_fn=decide_fn,
+    query_pool_status_fn=lambda master_url=None: status,
 )
-from tron_autopilot.store import RuntimeHistory
-# Use a synthetic large serial so parallel looks beneficial after comm
-serial = 30.0
-key = RuntimeHistory.key("dist/proof", "local", "baseline", "cpu", "fp32")
-ap.history.record(key, serial)
+hist_key = RuntimeHistory.key("dist/proof", "local", "baseline", "cpu", "fp32")
+ap.history.record(hist_key, serial)
 
 spec = WorkloadSpec(
     model_name="dist/proof",
@@ -260,15 +301,13 @@ spec = WorkloadSpec(
     bytes_per_item=8.0,
     reliability="tolerant",
 )
-plan = ap.plan(spec, strategy="autopilot")
+plan = ap.plan(spec, pool_status=status, strategy="autopilot")
 chosen = plan.chosen.target if plan.chosen else None
 dist = next(c for c in plan.candidates if c.target == "distributed")
 print("chosen", chosen, "dist_feasible", dist.feasible, dist.rejection_reasons)
 if not dist.feasible:
     raise SystemExit("distributed not feasible: " + str(dist.rejection_reasons))
-# Force distributed if autopilot picked local due to tiny Nanode rates
 if plan.chosen is None or plan.chosen.target != "distributed":
-    from dataclasses import replace
     plan = replace(plan, chosen=replace(dist, feasible=True))
 
 t0 = time.time()
