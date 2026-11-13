@@ -308,6 +308,19 @@ technical design behind each phase.
 
 ## Known follow-ups (not blocking, tracked here so they aren't lost)
 
+- [x] **Economic Autopilot (`tron_autopilot/`)** — unified plan/execute/
+  feedback over existing advisor + router + watchdog + cost accounting.
+  Strategies `fixed` / `cheapest` / `autopilot` share one executor;
+  decision JSONL + measured runtime history; e2e pooled execution and
+  dead-worker recovery evidence in `tests/test_autopilot_*.py`;
+  reproducible benchmark in `benchmarks/economic_autopilot.py`. Write-up:
+  `writeup/economic-autopilot.md`. Honest gaps left open: synthetic bench
+  body vs real LLM runner on CUDA; same-host pool ≠ WAN fleet; hourly
+  rates are user-configured.
+- [ ] **Next milestone after Autopilot:** run advisor-chosen
+  Baseline/Offload policies through Autopilot on real CUDA and publish
+  fixed/cheapest/autopilot comparison with measured VRAM/tok/s history
+  (see writeup next-milestone section).
 - [x] `tron/gpu/` OpenAI-compatible gateway now has `tron/gpu/README.md`
   documenting the `tron.gpu.*` layout (cluster / runtime / scheduler /
   openai_bridge), how to run the bridge (with the mocked-proxy test

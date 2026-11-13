@@ -259,3 +259,12 @@ None of this was wrong to have built — the billing layer, in particular, is
 a legitimate idea that just isn't the goal. It's removed so the repository
 reflects one thesis instead of two, and so a stranger cloning it sees the
 actual state of the system rather than four documents asserting it's done.
+
+## Economic Autopilot (integration layer)
+
+`tron_autopilot/` sits above the spine/router/efficiency/costtrace stack
+as a thin orchestration layer: one `WorkloadSpec` in, one explained
+`WorkloadPlan` out, then `execute_plan` using existing local policies or
+`tron_router.handoff.submit_to_pool`. It does not replace Phase 1–4
+mechanisms and does not restore the removed marketplace. See
+`writeup/economic-autopilot.md`.
