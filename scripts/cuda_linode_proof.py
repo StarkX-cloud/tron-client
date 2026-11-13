@@ -3,6 +3,11 @@
 
 Requires env:
   LINODE_TOKEN   — Linode personal access token (Runtime Secret)
+                   Scopes: Linodes Read/Write. Account Read/Write only needed
+                   for scripts/linode_request_gpu_access.py (support tickets).
+                   If create returns account-limit on GPU plans, open Support
+                   (or run that script) — token auth is fine; GPU is gated.
+                   Fallback CUDA proof: scripts/cuda_colab_proof.ipynb (Colab T4).
 
 Optional:
   LINODE_TYPE    — default g2-gpu-rtx4000a1-s (~$0.52/hr, cheapest GPU tier)

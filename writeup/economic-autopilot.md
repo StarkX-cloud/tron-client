@@ -179,3 +179,13 @@ or external provisioners; TRON does not fake that.
 workers advertising `efficiency_runtime`, on `pythia-410m`/`1.4b`, with
 peak VRAM in metrics — same honesty bar as
 `writeup/compute-efficiency-gpu-validation.md`.
+
+### CUDA proof paths (status)
+
+| Path | Status |
+|---|---|
+| `scripts/cuda_linode_proof.py` | Token works; **GPU plans account-gated** (HTTP 400 limit). CPU Nanode create/delete OK. No GPU instances on the account. |
+| `scripts/linode_request_gpu_access.py` | Needs PAT **Account: Read/Write** (current secret is Linodes-only → support API 401). Or open the same ask in Cloud Manager → Support. Plan name: `g2-gpu-rtx4000a1-s`. |
+| `scripts/cuda_colab_proof.ipynb` | **Ready now** — Colab → GPU (T4) → Run all (matches prior TRON T4 validation). |
+
+No alternate GPU-cloud secrets (`RUNPOD_*`, `VAST_*`, `LAMBDA_*`, …) are configured.
