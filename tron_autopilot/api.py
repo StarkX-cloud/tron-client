@@ -134,6 +134,60 @@ def run(
     return {"plan": plan_obj.to_dict(), "outcome": outcome.to_dict()}
 
 
+@app.get("/trust")
+def trust(x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH")):
+    """Declare auth/sandbox trust boundaries (Prompt 4)."""
+    _require_api_auth(x_tron_auth)
+    from tron_pilot.security import current_trust_model
+
+    return current_trust_model().__dict__
+
+
+@app.get("/providers")
+def providers(
+    verified_only: bool = False,
+    x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH"),
+):
+    _require_api_auth(x_tron_auth)
+    from tron_pilot.provider import ProviderRegistry
+
+    return {"providers": ProviderRegistry().list_providers(verified_only=verified_only)}
+
+
+@app.get("/providers/{provider_id}/stats")
+def provider_stats(
+    provider_id: str,
+    x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH"),
+):
+    _require_api_auth(x_tron_auth)
+    from tron_pilot.provider import ProviderRegistry
+    from tron_pilot.provider_stats import ProviderStatsStore
+
+    reg = ProviderRegistry()
+    rec = reg.get(provider_id)
+    stats = ProviderStatsStore().summary(
+        worker_name=rec.worker_name if rec else None,
+        provider_id=provider_id,
+    )
+    return {"provider": rec.to_dict() if rec else None, "stats": stats}
+
+
+@app.get("/usage")
+def usage(
+    customer_id: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
+    x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH"),
+):
+    """Customer usage report hook — estimates only, no custody."""
+    _require_api_auth(x_tron_auth)
+    from tron_pilot.usage import UsageLedger, usage_report
+
+    return usage_report(
+        UsageLedger(), customer_id=customer_id, since=since, until=until
+    )
+
+
 # Static Autopilot console (same pattern as tron_efficiency /dashboard).
 _dashboard_dir = os.path.join(os.path.dirname(__file__), "dashboard")
 if os.path.isdir(_dashboard_dir):

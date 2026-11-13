@@ -347,6 +347,12 @@ technical design behind each phase.
   completion, comm overhead, failure/recovery. Artifacts under
   `artifacts/adaptive_compute_*.json`. Write-up:
   `writeup/adaptive-compute-intelligence.md`. No unified-VRAM claim.
+- [x] **Global Compute Network / production readiness (`tron_pilot/`):**
+  provider registry + verify challenge, provider stats, soft tenancy,
+  usage ledger/report hooks (no custody), `TronClient` SDK for
+  plan/run/fleet/submit, Autopilot `/trust` `/providers` `/usage`,
+  external pilot harness → `artifacts/external_pilot.json`. Docs:
+  `writeup/global-compute-pilot.md`, `docs/integration.md`.
 - [x] `tron/gpu/` OpenAI-compatible gateway now has `tron/gpu/README.md`
   documenting the `tron.gpu.*` layout (cluster / runtime / scheduler /
   openai_bridge), how to run the bridge (with the mocked-proxy test

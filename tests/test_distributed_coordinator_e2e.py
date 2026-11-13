@@ -101,7 +101,7 @@ def live_pool(tmp_path, monkeypatch):
         while not stop.is_set():
             for wmod, token, _ in workers:
                 try:
-                    wmod.send_heartbeat(token)
+                    wmod.heartbeat(token)
                 except Exception:
                     pass
             time.sleep(0.3)
