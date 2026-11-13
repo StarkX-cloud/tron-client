@@ -44,7 +44,11 @@ def live_master_with_watchdog(tmp_path, monkeypatch):
     worker declared dead."""
     monkeypatch.setenv("TRON_SPINE_DIR", str(tmp_path / "spine"))
     import queue_server
+    if hasattr(queue_server, "BACKGROUND_STOP"):
+        queue_server.BACKGROUND_STOP.set()
+        time.sleep(0.15)
     importlib.reload(queue_server)
+    queue_server.BACKGROUND_STOP.clear()
     queue_server.HEARTBEAT_TIMEOUT_SECONDS = 1.0
 
     port = _free_port()
@@ -58,12 +62,15 @@ def live_master_with_watchdog(tmp_path, monkeypatch):
         time.sleep(0.05)
     assert server.started, "uvicorn server never reported started"
 
+    queue_server.BACKGROUND_STOP.clear()
     watchdog_thread = threading.Thread(target=queue_server._watchdog_loop, daemon=True)
     watchdog_thread.start()
 
     url = f"http://127.0.0.1:{port}"
     yield url, queue_server
 
+    queue_server.BACKGROUND_STOP.set()
+    watchdog_thread.join(timeout=2)
     server.should_exit = True
     server_thread.join(timeout=5)
 

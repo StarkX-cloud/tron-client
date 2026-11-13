@@ -277,6 +277,9 @@ MATCH_INTERVAL_SECONDS = 1.0
 # requeue path for real (see tests/test_pool_reliability.py and
 # writeup/compute-routing-layer.md), not a hypothetical one.
 MAX_JOB_REQUEUE_ATTEMPTS = int(os.environ.get("TRON_MAX_JOB_REQUEUE_ATTEMPTS", "3"))
+# Cleared in production; tests set this so daemon match/watchdog threads
+# exit and cannot drain later tests' job_queue after importlib.reload.
+BACKGROUND_STOP = threading.Event()
 
 # =========================
 # EMIT
@@ -1184,8 +1187,16 @@ def _match_loop():
     calls /next_job — see the comment there for why this exists
     (per-worker argmax alone can't do cross-worker arbitration).
     """
-    while True:
-        time.sleep(MATCH_INTERVAL_SECONDS)
+    while not BACKGROUND_STOP.is_set():
+        # Short slices so tests can stop promptly without waiting a full
+        # MATCH_INTERVAL_SECONDS after setting BACKGROUND_STOP.
+        deadline = time.time() + MATCH_INTERVAL_SECONDS
+        while time.time() < deadline:
+            if BACKGROUND_STOP.is_set():
+                return
+            time.sleep(min(0.05, max(0.0, deadline - time.time())))
+        if BACKGROUND_STOP.is_set():
+            return
         _run_match_cycle()
 
 
@@ -1194,8 +1205,14 @@ def _match_loop():
 # =========================
 
 def _watchdog_loop():
-    while True:
-        time.sleep(5)
+    while not BACKGROUND_STOP.is_set():
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if BACKGROUND_STOP.is_set():
+                return
+            time.sleep(min(0.05, max(0.0, deadline - time.time())))
+        if BACKGROUND_STOP.is_set():
+            return
         now = time.time()
         with lock:
             dead = [

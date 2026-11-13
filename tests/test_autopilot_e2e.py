@@ -31,7 +31,13 @@ def live_master_with_watchdog(tmp_path, monkeypatch):
     monkeypatch.setenv("TRON_SPINE_DIR", str(tmp_path / "spine"))
     import queue_server
 
+    # Stop any leftover match/watchdog threads from a prior reload before
+    # replacing module globals (they resolve BACKGROUND_STOP via globals).
+    if hasattr(queue_server, "BACKGROUND_STOP"):
+        queue_server.BACKGROUND_STOP.set()
+        time.sleep(0.15)
     importlib.reload(queue_server)
+    queue_server.BACKGROUND_STOP.clear()
     queue_server.HEARTBEAT_TIMEOUT_SECONDS = 1.0
 
     port = _free_port()
@@ -46,11 +52,17 @@ def live_master_with_watchdog(tmp_path, monkeypatch):
         time.sleep(0.05)
     assert server.started
 
-    threading.Thread(target=queue_server._watchdog_loop, daemon=True).start()
-    threading.Thread(target=queue_server._match_loop, daemon=True).start()
+    queue_server.BACKGROUND_STOP.clear()
+    watchdog_t = threading.Thread(target=queue_server._watchdog_loop, daemon=True)
+    match_t = threading.Thread(target=queue_server._match_loop, daemon=True)
+    watchdog_t.start()
+    match_t.start()
 
     url = f"http://127.0.0.1:{port}"
     yield url, queue_server
+    queue_server.BACKGROUND_STOP.set()
+    watchdog_t.join(timeout=2)
+    match_t.join(timeout=2)
     server.should_exit = True
     t.join(timeout=5)
 
