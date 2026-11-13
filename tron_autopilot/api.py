@@ -46,6 +46,13 @@ class PlanRequest(BaseModel):
     max_new_tokens: int = 32
     requires_efficiency_runtime: bool = False
     strategy: str = "autopilot"
+    # Distributed Execution Engine v1
+    parallelizable: bool = False
+    partition_items: list | None = None
+    map_op: str = "sum_squares"
+    min_shard_size: int = 1
+    max_parallel_workers: int | None = None
+    bytes_per_item: float = 64.0
 
 
 class RunRequest(PlanRequest):
@@ -68,6 +75,12 @@ def _spec_from(req: PlanRequest) -> WorkloadSpec:
         prompt=req.prompt,
         max_new_tokens=req.max_new_tokens,
         requires_efficiency_runtime=req.requires_efficiency_runtime,
+        parallelizable=req.parallelizable,
+        partition_items=req.partition_items,
+        map_op=req.map_op,
+        min_shard_size=req.min_shard_size,
+        max_parallel_workers=req.max_parallel_workers,
+        bytes_per_item=req.bytes_per_item,
     )
 
 
@@ -117,7 +130,7 @@ def run(
         wait_timeout_seconds=req.wait_timeout_seconds,
         strategy=req.strategy,
     )
-    ap.record_feedback(outcome)
+    ap.record_feedback(plan_obj, outcome)
     return {"plan": plan_obj.to_dict(), "outcome": outcome.to_dict()}
 
 

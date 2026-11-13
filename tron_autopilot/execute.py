@@ -109,6 +109,15 @@ def _execute_plan_body(
     strategy: str = "autopilot",
     efficiency: bool = False,
 ) -> ExecutionOutcome:
+    # Distributed map does not use efficiency policies or a caller func.
+    if plan.chosen is not None and plan.chosen.target == "distributed":
+        return _execute_distributed(
+            plan,
+            wait_timeout_seconds=wait_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            strategy=strategy,
+        )
+
     if efficiency and func is None:
         if plan.chosen is not None and plan.chosen.target == "pooled":
             from tron_autopilot.pooled_efficiency import run_efficiency_job
@@ -200,7 +209,8 @@ def _execute_plan_body(
             predicted_peak_memory_bytes=chosen.predicted_peak_memory_bytes,
             error=(
                 "execute_plan requires a callable `func`, or efficiency=True "
-                "to run the tron_efficiency Baseline/Offload path"
+                "to run the tron_efficiency Baseline/Offload path "
+                "(distributed map needs partition_items, not func)"
             ),
             decision_rationale=list(plan.rationale),
             warnings=list(plan.warnings),
@@ -397,6 +407,87 @@ def _execute_dedicated(
                 worker.destroy()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _execute_distributed(
+    plan: WorkloadPlan,
+    wait_timeout_seconds: float,
+    poll_interval_seconds: float,
+    strategy: str,
+) -> ExecutionOutcome:
+    """Independent-task map across pool workers via DistributedCoordinator."""
+    from tron_autopilot.distributed.coordinator import DistributedCoordinator
+    from tron_autopilot.distributed.ops import closed_form_sum_squares
+    from tron_autopilot.distributed.partition import partition_items
+
+    chosen = plan.chosen
+    spec = plan.spec
+    items = list(spec.partition_items or [])
+    n_shards = int((chosen.source_signals or {}).get("n_shards") or 0)
+    if n_shards < 1:
+        n_shards = max(2, min(len(items), 4))
+    shards = partition_items(
+        items,
+        n_shards,
+        workload_id=f"{spec.model_name}:{spec.map_op}",
+        min_shard_size=spec.min_shard_size,
+    )
+    master = (spec.master_url or "http://localhost:9000").rstrip("/")
+    coord = DistributedCoordinator(
+        master,
+        wait_timeout_seconds=wait_timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+        required_memory_gb=chosen.required_memory_gb or 0.25,
+    )
+    run = coord.run(shards, op=spec.map_op or "sum_squares")
+    actual_cost = cost_from_runtime(chosen.hourly_rate_usd, run.wall_seconds)
+
+    # Correctness check for the reference sum_squares workload.
+    metrics = {
+        "distributed": True,
+        "n_shards": len(shards),
+        "attempts_total": run.attempts_total,
+        "duplicates_suppressed": run.duplicates_suppressed,
+        "comm_predicted_seconds": (chosen.source_signals or {})
+        .get("parallel_estimate", {})
+        .get("predicted_comm_seconds"),
+    }
+    error = run.error
+    success = run.success
+    if success and (spec.map_op or "sum_squares") == "sum_squares":
+        expected = closed_form_sum_squares(len(items))
+        got = int(run.reduced["total"]) if run.reduced else None
+        metrics["expected_total"] = expected
+        metrics["got_total"] = got
+        if got != expected:
+            success = False
+            error = f"correctness failure: got {got} expected {expected}"
+
+    return ExecutionOutcome(
+        plan_id=plan.plan_id,
+        success=success,
+        target="distributed",
+        strategy=strategy,
+        actual_runtime_seconds=run.wall_seconds,
+        actual_cost_usd=actual_cost,
+        actual_peak_memory_bytes=None,
+        predicted_runtime_seconds=chosen.predicted_runtime_seconds,
+        predicted_cost_usd=chosen.predicted_cost_usd,
+        predicted_peak_memory_bytes=chosen.predicted_peak_memory_bytes,
+        result=run.to_dict(),
+        error=error,
+        recovery={
+            "mechanism": "per_shard_retry_plus_queue_watchdog",
+            "shard_requeues": [
+                s.requeue_count for s in run.shard_results
+            ],
+            "duplicates_suppressed": run.duplicates_suppressed,
+        },
+        decision_rationale=list(plan.rationale) + list(chosen.rationale),
+        warnings=list(plan.warnings),
+        timestamp=now(),
+        metrics=metrics,
+    )
 
 
 def _execute_local(plan, func, func_args, func_kwargs, strategy: str) -> ExecutionOutcome:

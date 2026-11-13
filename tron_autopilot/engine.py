@@ -397,7 +397,14 @@ class EconomicAutopilot:
             )
         )
 
-        # --- dedicated flag (never auto-executed) ---
+        # --- distributed (independent task parallelism across workers) ---
+        candidates.append(
+            self._build_distributed_candidate(
+                spec, status, local_rec, required_gb, pool_rate, placement
+            )
+        )
+
+        # --- dedicated flag (never auto-executed unless provisioner set) ---
         candidates.append(
             CandidateOption(
                 option_id="dedicated-flag",
@@ -414,13 +421,156 @@ class EconomicAutopilot:
                 feasible=False,
                 rejection_reasons=[
                     "dedicated is a flag for real provisioned infrastructure — "
-                    "Autopilot does not call a cloud API or GPU marketplace"
+                    "Autopilot does not call a cloud API or GPU marketplace "
+                    "unless TRON_DEDICATED_PROVISIONER is set at execute time"
                 ],
                 rationale=["surfaced for honesty when local/pool cannot serve the job"],
                 source_signals={},
             )
         )
         return candidates
+
+    def _build_distributed_candidate(
+        self, spec, status, local_rec, required_gb, pool_rate, placement
+    ) -> CandidateOption:
+        from tron_autopilot.distributed.cost_model import estimate_parallel_benefit
+        from tron_autopilot.distributed.partition import partition_items
+
+        items = list(spec.partition_items or [])
+        d_reasons: list[str] = []
+        d_rationale: list[str] = []
+        d_feasible = True
+
+        if not spec.parallelizable:
+            d_feasible = False
+            d_reasons.append("spec.parallelizable is False")
+        if len(items) < 2:
+            d_feasible = False
+            d_reasons.append("partition_items needs >= 2 items")
+        if not reliability_allows_pool(spec.reliability):
+            d_feasible = False
+            d_reasons.append("reliability=strict — distributed uses the pool path")
+        if not status.reachable or status.alive_worker_count < 2:
+            d_feasible = False
+            d_reasons.append(
+                f"need >= 2 alive workers for distributed "
+                f"(have {status.alive_worker_count}, reachable={status.reachable})"
+            )
+
+        avg_lat = None
+        avg_bw = None
+        if status.measured_links:
+            lats = [
+                float(v["latency_ms"])
+                for v in status.measured_links.values()
+                if isinstance(v, dict) and v.get("latency_ms") is not None
+            ]
+            bws = [
+                float(v["bandwidth_mbps"])
+                for v in status.measured_links.values()
+                if isinstance(v, dict) and v.get("bandwidth_mbps") is not None
+            ]
+            if lats:
+                avg_lat = sum(lats) / len(lats)
+            if bws:
+                avg_bw = sum(bws) / len(bws)
+
+        n_workers = status.alive_worker_count
+        if spec.max_parallel_workers is not None:
+            n_workers = min(n_workers, int(spec.max_parallel_workers))
+
+        # Prefer measured history for this model; else user expected_runtime.
+        serial_rt, serial_src = self._predicted_runtime(
+            spec, "local", local_rec.policy, local_rec.device, local_rec.dtype
+        )
+        if serial_rt is None and spec.expected_runtime_seconds is not None:
+            serial_rt = float(spec.expected_runtime_seconds)
+            serial_src = "user_expected_runtime_seconds"
+        d_rationale.append(f"serial runtime source: {serial_src}")
+
+        estimate = estimate_parallel_benefit(
+            n_items=len(items),
+            n_workers=n_workers,
+            serial_seconds=serial_rt,
+            hourly_rate_usd=pool_rate,
+            avg_latency_ms=avg_lat,
+            bandwidth_mbps=avg_bw,
+            bytes_per_item=float(spec.bytes_per_item),
+        )
+        d_rationale.extend(estimate.rationale)
+
+        if d_feasible and not estimate.worth_it:
+            if (
+                spec.requires_multi_node
+                and serial_rt is None
+                and status.alive_worker_count >= 2
+                and len(items) >= 2
+            ):
+                d_rationale.append(
+                    "requires_multi_node with unknown serial runtime — "
+                    "allowing distributed tentatively (speedup not yet proven)"
+                )
+            else:
+                d_feasible = False
+                d_reasons.append(
+                    "cost model: communication overhead makes distributed inefficient "
+                    "(not assuming more workers = faster)"
+                )
+
+        # Preview shard count for signals (deterministic).
+        n_shards = estimate.n_shards
+        if n_shards >= 1 and items:
+            preview = partition_items(
+                items,
+                n_shards,
+                workload_id=f"{spec.model_name}:{spec.map_op}",
+                min_shard_size=spec.min_shard_size,
+            )
+            n_shards = len(preview)
+
+        if (
+            spec.budget_usd is not None
+            and estimate.predicted_parallel_cost_usd is not None
+            and estimate.predicted_parallel_cost_usd > spec.budget_usd
+        ):
+            d_feasible = False
+            d_reasons.append(
+                f"predicted distributed cost "
+                f"${estimate.predicted_parallel_cost_usd:.6f} exceeds budget"
+            )
+        if (
+            spec.deadline_seconds is not None
+            and estimate.predicted_parallel_wall_seconds is not None
+            and estimate.predicted_parallel_wall_seconds > spec.deadline_seconds
+        ):
+            d_feasible = False
+            d_reasons.append("predicted distributed wall time exceeds deadline")
+
+        return CandidateOption(
+            option_id="distributed-map",
+            target="distributed",
+            policy=local_rec.policy,
+            device=local_rec.device,
+            dtype=local_rec.dtype,
+            memory_budget_bytes=local_rec.memory_budget_bytes,
+            required_memory_gb=required_gb,
+            hourly_rate_usd=pool_rate,
+            predicted_runtime_seconds=estimate.predicted_parallel_wall_seconds,
+            predicted_cost_usd=estimate.predicted_parallel_cost_usd,
+            predicted_peak_memory_bytes=(
+                int(required_gb * 1_000_000_000) if required_gb is not None else None
+            ),
+            feasible=d_feasible,
+            rejection_reasons=d_reasons,
+            rationale=d_rationale,
+            source_signals={
+                "parallel_estimate": estimate.to_dict(),
+                "n_shards": n_shards,
+                "map_op": spec.map_op,
+                "pool_status": status.to_dict(),
+                "router_target": placement.target,
+            },
+        )
 
     def _select(
         self,
@@ -453,13 +603,14 @@ class EconomicAutopilot:
                 if c.target == "dedicated":
                     continue
                 reasons = " ".join(c.rejection_reasons)
-                if c.target == "pooled" and (
+                if c.target in ("pooled", "distributed") and (
                     "unreachable" in reasons
                     or "0 alive workers" in reasons
+                    or "need >= 2 alive" in reasons
                     or "reliability=strict" in reasons
                 ):
                     continue
-                if c.target in ("local", "pooled"):
+                if c.target in ("local", "pooled", "distributed"):
                     available.append(c)
 
             if not available:
@@ -486,7 +637,11 @@ class EconomicAutopilot:
 
         # autopilot (default): only feasible candidates; minimize predicted cost;
         # if costs unknown, prefer router placement target among feasible.
-        feasible = [c for c in candidates if c.feasible and c.target in ("local", "pooled")]
+        feasible = [
+            c
+            for c in candidates
+            if c.feasible and c.target in ("local", "pooled", "distributed")
+        ]
         if not feasible:
             return None
 

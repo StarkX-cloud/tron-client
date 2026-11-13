@@ -330,6 +330,14 @@ technical design behind each phase.
 - [ ] **Next milestone:** Autopilot `--real-model` on a CUDA worker pool
   (pythia-410m/1.4b) with peak VRAM metrics
   (see `writeup/economic-autopilot.md`).
+- [x] **Distributed Execution Engine v1:** independent-task map across
+  pool workers (`tron_autopilot/distributed/`) — partition, communication
+  cost model (refuse when overhead wins), coordinator with idempotent
+  collect + per-shard retry, Autopilot candidate `target=distributed`.
+  Tests: `tests/test_distributed_*.py`. Multi-machine proof script:
+  `scripts/distributed_multi_machine_proof.py`. Write-up:
+  `writeup/distributed-execution-engine-v1.md`. Does **not** claim
+  tensor/pipeline parallel or distributed VRAM.
 - [x] `tron/gpu/` OpenAI-compatible gateway now has `tron/gpu/README.md`
   documenting the `tron.gpu.*` layout (cluster / runtime / scheduler /
   openai_bridge), how to run the bridge (with the mocked-proxy test

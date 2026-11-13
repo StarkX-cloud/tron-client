@@ -43,6 +43,18 @@ class WorkloadSpec:
     # When True, pooled candidates require workers that advertised
     # efficiency_runtime (torch/transformers/accelerate).
     requires_efficiency_runtime: bool = False
+    # Distributed Execution Engine v1 — independent task parallelism.
+    # When parallelizable=True and partition_items is a non-empty list,
+    # Autopilot may choose target="distributed" if the cost model says
+    # speedup beats communication overhead.
+    parallelizable: bool = False
+    partition_items: list | None = None
+    map_op: str = "sum_squares"
+    min_shard_size: int = 1
+    max_parallel_workers: int | None = None
+    bytes_per_item: float = 64.0
+    # Prefer distributed when requires_multi_node even if cost model is unsure
+    # only when worth_it — still never force inefficient parallelization.
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -53,7 +65,7 @@ class CandidateOption:
     """One feasible (or explicitly infeasible) way to run the workload."""
 
     option_id: str
-    target: str  # "local" | "pooled" | "dedicated" | "rejected"
+    target: str  # "local" | "pooled" | "distributed" | "dedicated" | "rejected"
     policy: str | None  # "baseline" | "offload" | None
     device: str | None
     dtype: str | None
