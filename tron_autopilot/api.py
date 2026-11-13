@@ -119,3 +119,15 @@ def run(
     )
     ap.record_feedback(outcome)
     return {"plan": plan_obj.to_dict(), "outcome": outcome.to_dict()}
+
+
+# Static Autopilot console (same pattern as tron_efficiency /dashboard).
+_dashboard_dir = os.path.join(os.path.dirname(__file__), "dashboard")
+if os.path.isdir(_dashboard_dir):
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount(
+        "/dashboard",
+        StaticFiles(directory=_dashboard_dir, html=True),
+        name="autopilot_dashboard",
+    )
