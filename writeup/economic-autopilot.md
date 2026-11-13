@@ -143,6 +143,19 @@ Local-only for real models: pool workers are not assumed to ship
 torch/transformers (stated in outcomes if a pooled plan is asked to run
 efficiency).
 
+### CUDA proof (Colab Tesla T4)
+
+Preserved: `artifacts/economic_autopilot_cuda_benchmark.json`
+(`EleutherAI/pythia-410m`, 16 tokens, `cuda_available=true`, Tesla T4 ~14.6 GiB).
+
+| Strategy | Successes | Cost/success | Avg completion | Peak GPU alloc | tok/s |
+|---|---:|---:|---:|---:|---:|
+| fixed | 1 | ~$0.00222 | ~16.0 s (cold load) | 822 MB | ~47.6 |
+| cheapest | 1 | ~$0.000166 | ~1.19 s | 822 MB | ~52.9 |
+| autopilot | 1 | ~$0.000160 | ~1.16 s | 822 MB | ~52.8 |
+
+Advisor chose `cuda` / `fp16` / `baseline` (weights ~810 MB fit T4 usable budget). Device in outcomes is `cuda`. First trial pays Hub/cold load; later trials use measured history. Not a pooled GPU fleet proof.
+
 ## Fleet capacity (toward “Computing Without Limits”)
 
 Workers now advertise `efficiency_runtime` (torch/transformers/accelerate
@@ -163,7 +176,7 @@ existing watchdog.
 | Measured cost feedback | **Built** |
 | Real LLM body (Baseline/Offload) | **Built** (local; pooled when workers advertise) |
 | Cross-machine capacity visibility | **Built** (fleet snapshot) |
-| CUDA economics at 410m/1.4b | **Not on this host** — re-run on GPU |
+| CUDA economics at 410m | **Proven** (Colab T4; see artifact) — 1.4b still open |
 | Auto-provision dedicated GPUs | **Not built** (flag only — by design, not a marketplace) |
 | Multi-tenant untrusted rental | **Out of scope** (removed) |
 
@@ -184,8 +197,6 @@ peak VRAM in metrics — same honesty bar as
 
 | Path | Status |
 |---|---|
-| `scripts/cuda_linode_proof.py` | Token works; **GPU plans account-gated** (HTTP 400 limit). CPU Nanode create/delete OK. No GPU instances on the account. |
-| `scripts/linode_request_gpu_access.py` | Needs PAT **Account: Read/Write** (current secret is Linodes-only → support API 401). Or open the same ask in Cloud Manager → Support. Plan name: `g2-gpu-rtx4000a1-s`. |
-| `scripts/cuda_colab_proof.ipynb` | **Ready now** — Colab → GPU (T4) → Run all (matches prior TRON T4 validation). |
-
-No alternate GPU-cloud secrets (`RUNPOD_*`, `VAST_*`, `LAMBDA_*`, …) are configured.
+| `scripts/cuda_colab_proof.ipynb` | **Done** — Colab Tesla T4; artifact `artifacts/economic_autopilot_cuda_benchmark.json`. |
+| `scripts/cuda_linode_proof.py` | Token works; **GPU plans account-gated** (HTTP 400). CPU Nanode create/delete OK. |
+| `scripts/linode_request_gpu_access.py` | Needs PAT **Account: Read/Write** (or Cloud Manager → Support for `g2-gpu-rtx4000a1-s`). |
