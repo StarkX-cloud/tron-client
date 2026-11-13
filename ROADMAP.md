@@ -317,10 +317,16 @@ technical design behind each phase.
   `writeup/economic-autopilot.md`. Honest gaps left open: synthetic bench
   body vs real LLM runner on CUDA; same-host pool ≠ WAN fleet; hourly
   rates are user-configured.
-- [ ] **Next milestone after Autopilot:** run advisor-chosen
-  Baseline/Offload policies through Autopilot on real CUDA and publish
-  fixed/cheapest/autopilot comparison with measured VRAM/tok/s history
-  (see writeup next-milestone section).
+- [x] **Autopilot ↔ tron_efficiency bridge:** `efficiency_exec.py` runs
+  advisor-chosen Baseline/Offload via `run_workload`; `--real-model`
+  CLI/benchmark; measured tok/s + peak memory in outcome metrics +
+  history. CPU pythia-70m results preserved under
+  `artifacts/economic_autopilot_real_model_benchmark.json`. Local-only
+  for real models (pool not assumed to have torch).
+- [ ] **Next milestone:** same `--real-model` path on real CUDA
+  (pythia-410m/1.4b), confirm `device=cuda` + peak VRAM metrics, optional
+  worker efficiency-runtime advertisement for honest pooled real-model
+  runs (see `writeup/economic-autopilot.md`).
 - [x] `tron/gpu/` OpenAI-compatible gateway now has `tron/gpu/README.md`
   documenting the `tron.gpu.*` layout (cluster / runtime / scheduler /
   openai_bridge), how to run the bridge (with the mocked-proxy test

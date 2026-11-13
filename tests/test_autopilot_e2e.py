@@ -230,8 +230,10 @@ def test_autopilot_recovery_after_dead_worker(
     plan = ap.plan(spec, pool_status=pool, strategy="autopilot")
     assert plan.chosen.target == "pooled"
 
+    # Register only the doomed worker first so the match loop cannot hand
+    # the job to a live rescuer before we observe the mid-job death
+    # (same ordering as tests/test_pool_reliability.py).
     dead, dead_auth = _register_worker(master_url, tmp_path, monkeypatch, "dead")
-    alive, alive_auth = _register_worker(master_url, tmp_path, monkeypatch, "alive")
 
     outcome_box = {}
 
@@ -249,12 +251,12 @@ def test_autopilot_recovery_after_dead_worker(
 
     # Dead worker claims the job and then vanishes (no complete, no heartbeat).
     claimed = None
-    for _ in range(50):
+    for _ in range(100):
         claimed = dead.fetch_next_job(dead_auth)
         if claimed:
             break
         time.sleep(0.05)
-    assert claimed is not None
+    assert claimed is not None, "doomed worker never received the Autopilot pooled job"
     job_id = claimed["id"]
 
     # Wait for watchdog to requeue (heartbeat timeout 1s + poll).
@@ -268,7 +270,14 @@ def test_autopilot_recovery_after_dead_worker(
         time.sleep(0.25)
     assert back_in_queue, "watchdog never requeued the dead worker's job"
 
-    rescued = alive.fetch_next_job(alive_auth)
+    alive, alive_auth = _register_worker(master_url, tmp_path, monkeypatch, "alive")
+    rescued = None
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        rescued = alive.fetch_next_job(alive_auth)
+        if rescued:
+            break
+        time.sleep(0.05)
     assert rescued is not None and rescued["id"] == job_id
     # requeue_count lives on the job object returned to the worker, not on
     # job_store after completion (same as queue_server._watchdog_loop).

@@ -110,19 +110,44 @@ resolves.
 
 ## Remaining limitations
 
-1. Synthetic benchmark body ≠ full LLM inference; wire `tron_efficiency.workloads.runner`
-   for GPU runs when deps + hardware allow (env-gated).
-2. Same-host `--live-pool` is not a multi-region fleet proof (real WAN tests
+1. Real-model Autopilot execution is **local-only** today; pooled real-model
+   needs workers that actually ship torch/transformers (not assumed).
+2. This development host has **no CUDA** — GPU Autopilot numbers are not
+   claimed here; re-run `--real-model` on a CUDA machine for VRAM metrics.
+3. Same-host `--live-pool` is not a multi-region fleet proof (real WAN tests
    already exist for `tron_router` separately).
-3. Hourly rates are **user-configured**, not live cloud list prices.
-4. First-run cost predictions need history or `expected_runtime_seconds`.
-5. Worker peak memory is not visible to the submitter on pooled runs.
+4. Hourly rates are **user-configured**, not live cloud list prices.
+5. First-run cost predictions need history or `expected_runtime_seconds`
+   (cold Hub/cache loads skew the first trial).
 6. No malicious-worker defense on the pool path (`reliability=strict` excludes pool).
+7. Checkpoint recovery still unsupported for arbitrary callables.
+
+## Real efficiency bridge (this iteration)
+
+`tron_autopilot/efficiency_exec.py` wires advisor-chosen `baseline` /
+`offload` into real `BaselinePolicy` / `OffloadPolicy` + `run_workload`.
+CLI/benchmark: `--real-model`. Measured load+e2e, tok/s, and peak CPU/GPU
+memory flow into `ExecutionOutcome.metrics` and `RuntimeHistory`.
+
+Preserved CPU run (`artifacts/economic_autopilot_real_model_benchmark.json`,
+`EleutherAI/pythia-70m`, 8 tokens, `cuda_available=False` on this host):
+
+```bash
+python3 -m benchmarks.economic_autopilot --real-model --trials 2 --max-new-tokens 8
+```
+
+First trial of a cold process pays Hub/cache load cost; later trials reflect
+steady-state. Autopilot does **not** claim CUDA results on this machine.
+
+Local-only for real models: pool workers are not assumed to ship
+torch/transformers (stated in outcomes if a pooled plan is asked to run
+efficiency).
 
 ## Recommended next engineering milestone
 
-**Autopilot ↔ real efficiency workload loop on CUDA:** execute the advisor’s
-chosen `BaselinePolicy` / `OffloadPolicy` through Autopilot end-to-end on a
-real GPU, feed measured tok/s and peak VRAM into `RuntimeHistory`, and publish
-one fixed/cheapest/autopilot comparison on `pythia-410m`/`1.4b` with the same
-honesty standard as `writeup/compute-efficiency-gpu-validation.md`.
+**Same Autopilot path on real CUDA:** re-run `--real-model` on a T4 (or
+similar) with `pythia-410m` / `1.4b`, confirm advisor selects `device=cuda`,
+capture peak VRAM in `metrics`, and publish fixed/cheapest/autopilot with
+the honesty bar of `writeup/compute-efficiency-gpu-validation.md`. Optional
+follow-on: advertise efficiency runtime on workers so pooled real-model
+execution is honest rather than assumed.

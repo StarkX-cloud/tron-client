@@ -46,18 +46,25 @@ def cmd_run(args) -> int:
         budget_usd=args.budget,
         deadline_seconds=args.deadline,
         reliability="strict" if args.strict else "tolerant",
-        expected_runtime_seconds=args.expected_runtime or args.sleep,
+        expected_runtime_seconds=args.expected_runtime or (
+            None if args.real_model else args.sleep
+        ),
         master_url=args.master_url,
+        max_new_tokens=args.max_new_tokens,
     )
     ap = EconomicAutopilot()
     plan = ap.plan(spec, strategy=args.strategy)
     print(format_plan(plan))
 
-    def _work():
-        time.sleep(args.sleep)
-        return {"slept": args.sleep, "model": args.model}
+    if args.real_model:
+        outcome = execute_plan(plan, efficiency=True, strategy=args.strategy)
+    else:
 
-    outcome = execute_plan(plan, func=_work, strategy=args.strategy)
+        def _work():
+            time.sleep(args.sleep)
+            return {"slept": args.sleep, "model": args.model}
+
+        outcome = execute_plan(plan, func=_work, strategy=args.strategy)
     ap.record_feedback(plan, outcome)
     print(format_outcome(outcome))
     if args.json:
@@ -68,14 +75,20 @@ def cmd_run(args) -> int:
 def cmd_bench(args) -> int:
     from benchmarks.economic_autopilot import run_benchmark
 
+    out = args.out
+    if args.real_model and out == "artifacts/economic_autopilot_benchmark.json":
+        out = "artifacts/economic_autopilot_real_model_benchmark.json"
     run_benchmark(
         trials=args.trials,
         hourly_rate=args.hourly_rate,
         pooled_hourly_rate=args.pooled_hourly_rate or 0.20,
         live_pool=args.live_pool,
         master_url=args.master_url,
-        out_path=args.out,
+        out_path=out,
         duration_seconds=args.sleep,
+        real_model=args.real_model,
+        model_name=args.model if args.real_model else "EleutherAI/pythia-70m",
+        max_new_tokens=args.max_new_tokens,
     )
     return 0
 
@@ -113,6 +126,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.1,
         help="synthetic workload duration seconds (not a model inference)",
     )
+    run_p.add_argument(
+        "--real-model",
+        action="store_true",
+        help="execute via tron_efficiency Baseline/Offload (downloads weights)",
+    )
+    run_p.add_argument("--max-new-tokens", type=int, default=16)
     run_p.set_defaults(func=cmd_run)
 
     bench_p = sub.add_parser("bench", help="fixed vs cheapest vs autopilot benchmark")
@@ -122,6 +141,9 @@ def build_parser() -> argparse.ArgumentParser:
     bench_p.add_argument("--live-pool", action="store_true")
     bench_p.add_argument("--master-url", default=None)
     bench_p.add_argument("--sleep", type=float, default=0.05)
+    bench_p.add_argument("--real-model", action="store_true")
+    bench_p.add_argument("--model", default="EleutherAI/pythia-70m")
+    bench_p.add_argument("--max-new-tokens", type=int, default=16)
     bench_p.add_argument("--out", default="artifacts/economic_autopilot_benchmark.json")
     bench_p.set_defaults(func=cmd_bench)
 

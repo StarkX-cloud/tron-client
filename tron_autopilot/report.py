@@ -79,8 +79,8 @@ def format_benchmark(rows: list[dict]) -> str:
         "# Economic Autopilot benchmark",
         "",
         "| Strategy | Successes | Failures | Cost/success ($) | "
-        "Avg completion (s) | Avg peak mem (B) | Avg recovery requeues |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "Avg completion (s) | Avg peak mem (B) | Avg tok/s | Avg recovery requeues |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in rows:
         lines.append(
@@ -88,6 +88,7 @@ def format_benchmark(rows: list[dict]) -> str:
             f"{_fmt(r.get('cost_per_successful_usd'))} | "
             f"{_fmt(r.get('avg_completion_seconds'))} | "
             f"{_fmt(r.get('avg_peak_memory_bytes'), as_int=True)} | "
+            f"{_fmt(r.get('avg_tokens_per_second'))} | "
             f"{_fmt(r.get('avg_requeue_count'))} |"
         )
     lines.append("")
@@ -127,6 +128,18 @@ def summarize_outcomes(strategy: str, outcomes: list[ExecutionOutcome]) -> dict:
         if rq is not None:
             requeues.append(float(rq))
     avg_rq = sum(requeues) / len(requeues) if requeues else 0.0
+    tok_vals = [
+        o.metrics.get("tokens_per_second")
+        for o in successes
+        if o.metrics and o.metrics.get("tokens_per_second") is not None
+    ]
+    avg_tok = sum(tok_vals) / len(tok_vals) if tok_vals else None
+    gpu_vals = [
+        o.metrics.get("peak_gpu_memory_allocated_bytes")
+        for o in successes
+        if o.metrics and o.metrics.get("peak_gpu_memory_allocated_bytes") is not None
+    ]
+    avg_gpu = sum(gpu_vals) / len(gpu_vals) if gpu_vals else None
     return {
         "strategy": strategy,
         "successes": len(successes),
@@ -135,6 +148,8 @@ def summarize_outcomes(strategy: str, outcomes: list[ExecutionOutcome]) -> dict:
         "cost_per_successful_usd": cost_per,
         "avg_completion_seconds": avg_rt,
         "avg_peak_memory_bytes": avg_mem,
+        "avg_tokens_per_second": avg_tok,
+        "avg_peak_gpu_memory_bytes": avg_gpu,
         "avg_requeue_count": avg_rq,
         "total_runs": len(outcomes),
     }

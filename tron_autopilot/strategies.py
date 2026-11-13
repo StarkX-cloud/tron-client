@@ -20,14 +20,17 @@ def run_strategy(
     autopilot: EconomicAutopilot,
     spec: WorkloadSpec,
     strategy: str,
-    func: Callable[..., Any],
+    func: Callable[..., Any] | None = None,
     func_args: tuple = (),
     func_kwargs: dict | None = None,
     pool_status=None,
     wait_timeout_seconds: float = 120.0,
+    efficiency: bool = False,
 ) -> tuple[WorkloadPlan, ExecutionOutcome]:
     if strategy not in STRATEGIES:
         raise ValueError(f"unknown strategy {strategy!r}; expected one of {STRATEGIES}")
+    if not efficiency and func is None:
+        raise ValueError("run_strategy requires func=... or efficiency=True")
     plan = autopilot.plan(spec, pool_status=pool_status, strategy=strategy)
     outcome = execute_plan(
         plan,
@@ -36,6 +39,7 @@ def run_strategy(
         func_kwargs=func_kwargs,
         wait_timeout_seconds=wait_timeout_seconds,
         strategy=strategy,
+        efficiency=efficiency,
     )
     autopilot.record_feedback(plan, outcome)
     return plan, outcome

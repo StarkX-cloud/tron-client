@@ -184,12 +184,32 @@ def run_benchmark(
     master_url: str | None = None,
     out_path: str | None = None,
     duration_seconds: float = 0.05,
+    real_model: bool = False,
+    model_name: str = "EleutherAI/pythia-70m",
+    max_new_tokens: int = 16,
+    deadline_seconds: float | None = None,
 ) -> dict:
-    model_name = "synthetic/autopilot-bench"
-    # ~2GB fp16 footprint → advisor on 8GB CPU RAM still baseline; for
-    # "needs offload" contrast we shrink synthetic RAM in a second scenario
-    # inside the same run when comparing fixed vs autopilot memory choices.
-    param_count = 1_000_000_000  # analytical stand-in
+    """Run fixed/cheapest/autopilot comparison.
+
+    ``real_model=True`` executes advisor-chosen Baseline/Offload via
+    ``tron_efficiency`` (downloads weights; slow). Default is the synthetic
+    callable path used for fast CI. CUDA is used only when the real advisor
+    + ``detect_hardware()`` select ``device=cuda`` — this host may be CPU-only.
+    """
+    if real_model:
+        return _run_real_model_benchmark(
+            trials=trials,
+            hourly_rate=hourly_rate,
+            pooled_hourly_rate=pooled_hourly_rate,
+            out_path=out_path,
+            model_name=model_name,
+            max_new_tokens=max_new_tokens,
+            deadline_seconds=deadline_seconds or 600.0,
+        )
+
+    synthetic_model = "synthetic/autopilot-bench"
+    # Analytical stand-in size for the advisor in synthetic mode.
+    param_count = 1_000_000_000
 
     results_dir = Path(out_path).parent if out_path else Path("artifacts")
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -205,21 +225,20 @@ def run_benchmark(
         # Let worker register + first heartbeat
         time.sleep(0.5)
 
-    def recommend_fn(model_name, hardware=None, gpu_budget_bytes_override=None, size_estimate=None):
-        size = size_estimate or _fake_size(param_count, model_name)
+    def recommend_fn(name, hardware=None, gpu_budget_bytes_override=None, size_estimate=None):
+        size = size_estimate or _fake_size(param_count, name)
         return recommend(
-            model_name,
+            name,
             hardware=hardware or _fake_cpu_hardware(8),
             gpu_budget_bytes_override=gpu_budget_bytes_override,
             size_estimate=size,
         )
 
     # Seed history so cost predictions are measured, not empty on trial 1+.
-    # One calibration local run at the expected duration.
-    seed_key = RuntimeHistory.key(model_name, "local", "baseline", "cpu", "fp32")
+    seed_key = RuntimeHistory.key(synthetic_model, "local", "baseline", "cpu", "fp32")
     history.record(seed_key, duration_seconds)
     history.record(
-        RuntimeHistory.key(model_name, "pooled", "baseline", "cpu", "fp32"),
+        RuntimeHistory.key(synthetic_model, "pooled", "baseline", "cpu", "fp32"),
         duration_seconds + 0.02,
     )
 
@@ -231,12 +250,7 @@ def run_benchmark(
         recommend_fn=recommend_fn,
     )
 
-    # When not using a live pool, inject an unreachable or empty pool so
-    # strategies that want pooled don't pretend a fleet exists.
-    injected_pool = None
     if pool_url:
-        from tron_router.decision import query_pool_status
-
         injected_pool = None  # real query via master_url on spec
     else:
         injected_pool = PoolStatus(
@@ -252,7 +266,7 @@ def run_benchmark(
         for strategy in STRATEGIES:
             for trial in range(trials):
                 spec = WorkloadSpec(
-                    model_name=model_name,
+                    model_name=synthetic_model,
                     hourly_rate_usd=hourly_rate,
                     pooled_hourly_rate_usd=pooled_hourly_rate,
                     budget_usd=1.0,
@@ -291,12 +305,14 @@ def run_benchmark(
             "pooled_hourly_rate_usd": pooled_hourly_rate,
             "live_pool": bool(pool_url),
             "master_url": pool_url,
-            "model_name": model_name,
+            "model_name": synthetic_model,
+            "real_model": False,
             "notes": [
                 "Synthetic workload body — decision path uses real Autopilot/"
                 "advisor/router interfaces with an injected size estimate.",
                 "Same-host live pool is not a multi-region fleet proof.",
                 "Cost = configured hourly rate × measured wall time.",
+                "Use --real-model for tron_efficiency Baseline/Offload execution.",
             ],
         },
         "summaries": summaries,
@@ -314,6 +330,106 @@ def run_benchmark(
     return payload
 
 
+def _run_real_model_benchmark(
+    trials: int,
+    hourly_rate: float,
+    pooled_hourly_rate: float,
+    out_path: str | None,
+    model_name: str,
+    max_new_tokens: int,
+    deadline_seconds: float,
+) -> dict:
+    """Advisor + real Baseline/Offload via tron_efficiency (local only)."""
+    from tron_efficiency.hardware.detect import detect_hardware
+
+    results_dir = Path(out_path).parent if out_path else Path("artifacts")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    # Separate logs so synthetic + real runs don't overwrite each other.
+    log = DecisionLog(results_dir / "autopilot_real_decisions.jsonl")
+    history = RuntimeHistory(results_dir / "autopilot_real_history.json")
+    hardware = detect_hardware()
+
+    autopilot = EconomicAutopilot(
+        decision_log=log,
+        history=history,
+        hardware=hardware,
+    )
+
+    # No fabricated pool — real-model path is local efficiency execution.
+    injected_pool = PoolStatus(
+        reachable=False,
+        master_url="http://127.0.0.1:9",
+        error="real-model benchmark: local efficiency path only (no pool assumed)",
+    )
+
+    all_outcomes = {s: [] for s in STRATEGIES}
+    all_plans = {s: [] for s in STRATEGIES}
+
+    for strategy in STRATEGIES:
+        for trial in range(trials):
+            spec = WorkloadSpec(
+                model_name=model_name,
+                hourly_rate_usd=hourly_rate,
+                pooled_hourly_rate_usd=pooled_hourly_rate,
+                budget_usd=None,  # don't reject first-run unknown costs
+                deadline_seconds=deadline_seconds,
+                reliability="tolerant",
+                expected_runtime_seconds=None,  # learn from measured history only
+                max_new_tokens=max_new_tokens,
+            )
+            plan, outcome = run_strategy(
+                autopilot,
+                spec,
+                strategy,
+                pool_status=injected_pool,
+                efficiency=True,
+            )
+            all_plans[strategy].append(plan.to_dict())
+            all_outcomes[strategy].append(outcome)
+            print(
+                f"[{strategy} trial {trial+1}/{trials}] "
+                f"success={outcome.success} runtime={outcome.actual_runtime_seconds:.3f}s "
+                f"cost={outcome.actual_cost_usd} "
+                f"tok/s={(outcome.metrics or {}).get('tokens_per_second')} "
+                f"err={outcome.error}"
+            )
+
+    summaries = [summarize_outcomes(s, all_outcomes[s]) for s in STRATEGIES]
+    cuda = bool(hardware.cuda_available and hardware.gpus)
+    payload = {
+        "meta": {
+            "trials": trials,
+            "hourly_rate_usd": hourly_rate,
+            "pooled_hourly_rate_usd": pooled_hourly_rate,
+            "live_pool": False,
+            "model_name": model_name,
+            "real_model": True,
+            "max_new_tokens": max_new_tokens,
+            "hardware": hardware.to_dict(),
+            "cuda_available": cuda,
+            "notes": [
+                "Real tron_efficiency Baseline/Offload execution through Autopilot.",
+                "Local-only: pool workers are not assumed to have torch/transformers.",
+                (
+                    "CUDA path selected by advisor when detect_hardware() reports a GPU; "
+                    f"this run cuda_available={cuda}."
+                ),
+                "Cost = configured hourly rate × (load + e2e) measured seconds.",
+                "Not a distributed-VRAM or marketplace claim.",
+            ],
+        },
+        "summaries": summaries,
+        "plans": all_plans,
+        "outcomes": {s: [o.to_dict() for o in outs] for s, outs in all_outcomes.items()},
+        "markdown": format_benchmark(summaries),
+    }
+    if out_path:
+        Path(out_path).write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        Path(out_path).with_suffix(".md").write_text(payload["markdown"], encoding="utf-8")
+    print(payload["markdown"])
+    return payload
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="benchmarks.economic_autopilot")
     p.add_argument("--trials", type=int, default=3)
@@ -323,19 +439,34 @@ def main(argv=None) -> int:
     p.add_argument("--master-url", default=None)
     p.add_argument("--duration-seconds", type=float, default=0.05)
     p.add_argument(
+        "--real-model",
+        action="store_true",
+        help="run advisor-chosen Baseline/Offload via tron_efficiency (slow; downloads weights)",
+    )
+    p.add_argument("--model", default="EleutherAI/pythia-70m")
+    p.add_argument("--max-new-tokens", type=int, default=16)
+    p.add_argument("--deadline-seconds", type=float, default=None)
+    p.add_argument(
         "--out",
         default="artifacts/economic_autopilot_benchmark.json",
         help="JSON results path (markdown sibling written alongside)",
     )
     args = p.parse_args(argv)
+    out = args.out
+    if args.real_model and out == "artifacts/economic_autopilot_benchmark.json":
+        out = "artifacts/economic_autopilot_real_model_benchmark.json"
     run_benchmark(
         trials=args.trials,
         hourly_rate=args.hourly_rate,
         pooled_hourly_rate=args.pooled_hourly_rate,
         live_pool=args.live_pool,
         master_url=args.master_url,
-        out_path=args.out,
+        out_path=out,
         duration_seconds=args.duration_seconds,
+        real_model=args.real_model,
+        model_name=args.model,
+        max_new_tokens=args.max_new_tokens,
+        deadline_seconds=args.deadline_seconds,
     )
     return 0
 

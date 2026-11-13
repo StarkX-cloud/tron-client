@@ -384,9 +384,16 @@ wall time, with predicted-vs-actual feedback):
 ```bash
 python3 -m tron_autopilot.cli plan --model EleutherAI/pythia-70m --hourly-rate 0.50
 python3 -m tron_autopilot.cli run  --model EleutherAI/pythia-70m --hourly-rate 0.50 --sleep 0.1
+python3 -m tron_autopilot.cli run  --model EleutherAI/pythia-70m --hourly-rate 0.50 --real-model
 python3 -m tron_autopilot.cli bench --trials 3 --out artifacts/economic_autopilot_benchmark.json
 python3 -m tron_autopilot.cli bench --trials 3 --live-pool
+python3 -m tron_autopilot.cli bench --real-model --trials 2 --max-new-tokens 8
 ```
+
+`--real-model` executes the advisor-chosen `BaselinePolicy` /
+`OffloadPolicy` through `tron_efficiency` (needs
+`requirements-training.txt`). CUDA is used only when
+`detect_hardware()` reports a GPU — this path never fabricates VRAM wins.
 
 A workload carries budget, deadline, and reliability. Autopilot builds
 feasible candidates (local / pooled / dedicated-flag), picks by strategy

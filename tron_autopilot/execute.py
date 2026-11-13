@@ -44,8 +44,19 @@ def execute_plan(
     wait_timeout_seconds: float = 120.0,
     poll_interval_seconds: float = 0.1,
     strategy: str = "autopilot",
+    efficiency: bool = False,
 ) -> ExecutionOutcome:
-    """Run ``plan.chosen``. ``func`` is required for local/pooled execution."""
+    """Run ``plan.chosen``.
+
+    Pass ``func`` for an arbitrary callable (local or pooled). Set
+    ``efficiency=True`` (and omit ``func``) to run the advisor-chosen
+    Baseline/Offload path through ``tron_efficiency.workloads.runner``.
+    """
+    if efficiency and func is None:
+        from tron_autopilot.efficiency_exec import run_efficiency_workload
+
+        return run_efficiency_workload(plan, strategy=strategy)
+
     if plan.chosen is None:
         return ExecutionOutcome(
             plan_id=plan.plan_id,
@@ -98,7 +109,10 @@ def execute_plan(
             predicted_runtime_seconds=chosen.predicted_runtime_seconds,
             predicted_cost_usd=chosen.predicted_cost_usd,
             predicted_peak_memory_bytes=chosen.predicted_peak_memory_bytes,
-            error="execute_plan requires a callable `func` to run",
+            error=(
+                "execute_plan requires a callable `func`, or efficiency=True "
+                "to run the tron_efficiency Baseline/Offload path"
+            ),
             decision_rationale=list(plan.rationale),
             warnings=list(plan.warnings),
             timestamp=now(),

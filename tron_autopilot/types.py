@@ -37,6 +37,9 @@ class WorkloadSpec:
     # success; token costs stay None unless the caller fills them via the
     # returned handle — compute $ comes from hourly_rate × seconds.
     costtrace_task: str | None = None
+    # Efficiency-workload knobs (used when executing via tron_efficiency).
+    prompt: str = "The quick brown fox jumps over the lazy dog, and"
+    max_new_tokens: int = 32
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -119,6 +122,8 @@ class ExecutionOutcome:
     warnings: list[str] = field(default_factory=list)
     job_id: str | None = None
     timestamp: float = 0.0
+    # Optional measured efficiency metrics (tok/s, GPU/CPU peaks, etc.).
+    metrics: dict = field(default_factory=dict)
 
     def feedback_delta(self) -> dict:
         """Predicted vs actual deltas. None where either side is unknown."""
