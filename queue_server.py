@@ -180,6 +180,18 @@ training_sessions = TrainingSessionRegistry()
 # auth_token. Unset (the local-dev/test default) means no check at all,
 # so existing tests and the loopback example are unaffected.
 TRAINING_AUTH_TOKEN = os.environ.get("TRON_TRAINING_AUTH_TOKEN") or None
+# Job-queue submit gate for shared fleets. Unset = local-dev/test default
+# (existing tests post to /submit without a header). When set, /submit
+# requires a matching X-TRON-AUTH header (same header name as training).
+SUBMIT_AUTH_TOKEN = os.environ.get("TRON_SUBMIT_AUTH_TOKEN") or None
+
+
+def _require_submit_auth(request: Request) -> None:
+    if not SUBMIT_AUTH_TOKEN:
+        return
+    supplied = request.headers.get("X-TRON-AUTH")
+    if not supplied or not hmac.compare_digest(supplied, SUBMIT_AUTH_TOKEN):
+        raise HTTPException(status_code=401, detail="missing or invalid X-TRON-AUTH token")
 
 
 def _require_training_auth(request: Request) -> None:
@@ -338,6 +350,9 @@ def register_worker(worker: dict):
             "efficiency_runtime": bool(
                 worker.get("efficiency_runtime", caps.get("efficiency_runtime", False))
             ),
+            # Optional economics signals (Autopilot fleet pricing).
+            "sku": worker.get("sku") or caps.get("sku"),
+            "hourly_rate_usd": worker.get("hourly_rate_usd", caps.get("hourly_rate_usd")),
             "capabilities": caps,
             "load": 0,
             "status": "idle",
@@ -478,7 +493,8 @@ def heartbeat_alias(payload: dict):
 # =========================
 
 @app.post("/submit")
-def submit(job: dict):
+def submit(job: dict, request: Request):
+    _require_submit_auth(request)
 
     job_id = str(uuid.uuid4())
 
@@ -559,7 +575,16 @@ def metrics():
 
 @app.get("/workers")
 def get_workers():
-    return workers
+    # Never leak per-worker auth tokens to fleet observers / Autopilot.
+    safe = {}
+    for name, w in workers.items():
+        if not isinstance(w, dict):
+            safe[name] = w
+            continue
+        redacted = dict(w)
+        redacted.pop("auth_token", None)
+        safe[name] = redacted
+    return safe
 
 
 @app.get("/topology")

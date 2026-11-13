@@ -36,6 +36,39 @@ def _peak_rss_bytes() -> int | None:
         return None
 
 
+def _record_costtrace(plan: WorkloadPlan, outcome: ExecutionOutcome) -> None:
+    task = getattr(plan.spec, "costtrace_task", None)
+    if not task:
+        return
+    try:
+        import time as _time
+
+        from tron_costtrace.schema import CallRecord
+        from tron_costtrace.tracer import default_store
+
+        device = None
+        if plan.chosen is not None:
+            device = plan.chosen.device
+        default_store().append(
+            CallRecord(
+                task=str(task),
+                model=f"tron-compute/{device or outcome.target}",
+                input_tokens=None,
+                output_tokens=None,
+                cost_usd=outcome.actual_cost_usd,
+                latency_seconds=float(outcome.actual_runtime_seconds or 0.0),
+                retry_count=int(
+                    (outcome.recovery or {}).get("requeue_count_observed") or 0
+                ),
+                success=bool(outcome.success),
+                error=outcome.error,
+                timestamp=_time.time(),
+            )
+        )
+    except Exception:  # noqa: BLE001 - ledger must never break execution
+        pass
+
+
 def execute_plan(
     plan: WorkloadPlan,
     func: Callable[..., Any] | None = None,
@@ -52,13 +85,37 @@ def execute_plan(
     ``efficiency=True`` (and omit ``func``) to run the advisor-chosen
     Baseline/Offload path through ``tron_efficiency.workloads.runner``.
     """
+    outcome = _execute_plan_body(
+        plan,
+        func=func,
+        func_args=func_args,
+        func_kwargs=func_kwargs,
+        wait_timeout_seconds=wait_timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+        strategy=strategy,
+        efficiency=efficiency,
+    )
+    _record_costtrace(plan, outcome)
+    return outcome
+
+
+def _execute_plan_body(
+    plan: WorkloadPlan,
+    func: Callable[..., Any] | None = None,
+    func_args: tuple = (),
+    func_kwargs: dict | None = None,
+    wait_timeout_seconds: float = 120.0,
+    poll_interval_seconds: float = 0.1,
+    strategy: str = "autopilot",
+    efficiency: bool = False,
+) -> ExecutionOutcome:
     if efficiency and func is None:
         if plan.chosen is not None and plan.chosen.target == "pooled":
             from tron_autopilot.pooled_efficiency import run_efficiency_job
 
             # Submit the real-model job to a worker that advertised
             # efficiency_runtime. Watchdog recovery stays on queue_server.
-            outcome = execute_plan(
+            outcome = _execute_plan_body(
                 plan,
                 func=run_efficiency_job,
                 func_kwargs={
@@ -118,24 +175,15 @@ def execute_plan(
 
     chosen = plan.chosen
     if chosen.target == "dedicated":
-        return ExecutionOutcome(
-            plan_id=plan.plan_id,
-            success=False,
-            target="dedicated",
+        return _execute_dedicated(
+            plan,
+            func=func,
+            func_args=func_args,
+            func_kwargs=func_kwargs or {},
+            wait_timeout_seconds=wait_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
             strategy=strategy,
-            actual_runtime_seconds=0.0,
-            actual_cost_usd=None,
-            actual_peak_memory_bytes=None,
-            predicted_runtime_seconds=chosen.predicted_runtime_seconds,
-            predicted_cost_usd=chosen.predicted_cost_usd,
-            predicted_peak_memory_bytes=chosen.predicted_peak_memory_bytes,
-            error=(
-                "dedicated is a flag only — Autopilot does not provision "
-                "infrastructure or call a GPU marketplace"
-            ),
-            decision_rationale=list(plan.rationale) + list(chosen.rationale),
-            warnings=list(plan.warnings),
-            timestamp=now(),
+            efficiency=efficiency,
         )
 
     if func is None:
@@ -189,6 +237,166 @@ def execute_plan(
         error=f"unknown target {chosen.target!r}",
         timestamp=now(),
     )
+
+
+def _execute_dedicated(
+    plan,
+    func,
+    func_args,
+    func_kwargs,
+    wait_timeout_seconds: float,
+    poll_interval_seconds: float,
+    strategy: str,
+    efficiency: bool,
+) -> ExecutionOutcome:
+    """Opt-in provisioner path. Without TRON_DEDICATED_PROVISIONER, refuse honestly."""
+    chosen = plan.chosen
+    try:
+        from tron_autopilot.provisioners import get_provisioner
+
+        provisioner = get_provisioner()
+    except Exception as exc:  # noqa: BLE001
+        return ExecutionOutcome(
+            plan_id=plan.plan_id,
+            success=False,
+            target="dedicated",
+            strategy=strategy,
+            actual_runtime_seconds=0.0,
+            actual_cost_usd=None,
+            actual_peak_memory_bytes=None,
+            predicted_runtime_seconds=chosen.predicted_runtime_seconds,
+            predicted_cost_usd=chosen.predicted_cost_usd,
+            predicted_peak_memory_bytes=chosen.predicted_peak_memory_bytes,
+            error=f"dedicated provisioner error: {exc}",
+            decision_rationale=list(plan.rationale) + list(chosen.rationale),
+            warnings=list(plan.warnings),
+            timestamp=now(),
+        )
+
+    if provisioner is None:
+        return ExecutionOutcome(
+            plan_id=plan.plan_id,
+            success=False,
+            target="dedicated",
+            strategy=strategy,
+            actual_runtime_seconds=0.0,
+            actual_cost_usd=None,
+            actual_peak_memory_bytes=None,
+            predicted_runtime_seconds=chosen.predicted_runtime_seconds,
+            predicted_cost_usd=chosen.predicted_cost_usd,
+            predicted_peak_memory_bytes=chosen.predicted_peak_memory_bytes,
+            error=(
+                "dedicated requires TRON_DEDICATED_PROVISIONER "
+                "(e.g. linode) — unset means refuse, not fake a marketplace"
+            ),
+            decision_rationale=list(plan.rationale) + list(chosen.rationale),
+            warnings=list(plan.warnings),
+            timestamp=now(),
+        )
+
+    master_url = (plan.spec.master_url or "http://localhost:9000").rstrip("/")
+    worker = None
+    try:
+        worker = provisioner.provision(master_url=master_url)
+        # Re-route as pooled onto the freshly attached worker.
+        from dataclasses import replace
+
+        from tron_autopilot.types import CandidateOption
+
+        pooled = CandidateOption(
+            option_id="dedicated-provisioned-pool",
+            target="pooled",
+            policy=chosen.policy,
+            device=chosen.device,
+            dtype=chosen.dtype,
+            memory_budget_bytes=chosen.memory_budget_bytes,
+            required_memory_gb=chosen.required_memory_gb,
+            hourly_rate_usd=getattr(worker, "hourly_rate_usd", chosen.hourly_rate_usd),
+            predicted_runtime_seconds=chosen.predicted_runtime_seconds,
+            predicted_cost_usd=chosen.predicted_cost_usd,
+            predicted_peak_memory_bytes=chosen.predicted_peak_memory_bytes,
+            feasible=True,
+            rejection_reasons=[],
+            rationale=list(chosen.rationale)
+            + [
+                f"provisioned {getattr(worker, 'sku', 'node')} "
+                f"as worker {getattr(worker, 'worker_name', '?')}"
+            ],
+            source_signals={
+                "provisioner": "linode",
+                "worker_name": getattr(worker, "worker_name", None),
+                "sku": getattr(worker, "sku", None),
+            },
+        )
+        pooled_plan = replace(plan, chosen=pooled)
+        if efficiency and func is None:
+            from tron_autopilot.pooled_efficiency import run_efficiency_job
+
+            return _execute_pooled(
+                pooled_plan,
+                run_efficiency_job,
+                (),
+                {
+                    "model_name": plan.spec.model_name,
+                    "policy": pooled.policy or "baseline",
+                    "device": pooled.device or "cpu",
+                    "dtype": pooled.dtype,
+                    "memory_budget_bytes": pooled.memory_budget_bytes,
+                    "max_new_tokens": plan.spec.max_new_tokens,
+                    "prompt": plan.spec.prompt,
+                    "hourly_rate_usd": pooled.hourly_rate_usd,
+                },
+                wait_timeout_seconds=wait_timeout_seconds,
+                poll_interval_seconds=poll_interval_seconds,
+                strategy=strategy,
+            )
+        if func is None:
+            return ExecutionOutcome(
+                plan_id=plan.plan_id,
+                success=False,
+                target="dedicated",
+                strategy=strategy,
+                actual_runtime_seconds=0.0,
+                actual_cost_usd=None,
+                actual_peak_memory_bytes=None,
+                predicted_runtime_seconds=chosen.predicted_runtime_seconds,
+                predicted_cost_usd=chosen.predicted_cost_usd,
+                predicted_peak_memory_bytes=chosen.predicted_peak_memory_bytes,
+                error="dedicated provisioned but no func/efficiency payload to run",
+                timestamp=now(),
+            )
+        return _execute_pooled(
+            pooled_plan,
+            func,
+            func_args,
+            func_kwargs,
+            wait_timeout_seconds=wait_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            strategy=strategy,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return ExecutionOutcome(
+            plan_id=plan.plan_id,
+            success=False,
+            target="dedicated",
+            strategy=strategy,
+            actual_runtime_seconds=0.0,
+            actual_cost_usd=None,
+            actual_peak_memory_bytes=None,
+            predicted_runtime_seconds=chosen.predicted_runtime_seconds,
+            predicted_cost_usd=chosen.predicted_cost_usd,
+            predicted_peak_memory_bytes=chosen.predicted_peak_memory_bytes,
+            error=f"{type(exc).__name__}: {exc}",
+            decision_rationale=list(plan.rationale) + list(chosen.rationale),
+            warnings=list(plan.warnings),
+            timestamp=now(),
+        )
+    finally:
+        if worker is not None:
+            try:
+                worker.destroy()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _execute_local(plan, func, func_args, func_kwargs, strategy: str) -> ExecutionOutcome:

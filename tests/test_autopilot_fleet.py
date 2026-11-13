@@ -46,7 +46,7 @@ def test_query_fleet_capacity_from_injected_workers():
     assert fleet.can_run_efficiency_pooled()
     assert fleet.total_memory_gb == 24.0
     d = fleet.to_dict()
-    assert "does not provision cloud GPUs" in d["limits_honestly"][1]
+    assert "dedicated provisioner" in d["limits_honestly"][1]
 
 
 def test_requires_efficiency_runtime_blocks_pool_without_capable_workers(tmp_path):

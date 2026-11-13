@@ -204,6 +204,21 @@ def register_worker():
     gpu_available, gpu_name, vram_gb, cuda_cores = detect_gpu()
     memory_gb = _reportable_memory_gb(gpu_available, vram_gb)
     efficiency_runtime = _detect_efficiency_runtime()
+    sku = os.environ.get("TRON_WORKER_SKU") or None
+    hourly_raw = os.environ.get("TRON_WORKER_HOURLY_RATE")
+    hourly_rate_usd = None
+    if hourly_raw:
+        try:
+            hourly_rate_usd = float(hourly_raw)
+        except ValueError:
+            hourly_rate_usd = None
+    if hourly_rate_usd is None and sku:
+        try:
+            from tron_autopilot.pricing import hourly_usd_for_sku
+
+            hourly_rate_usd = hourly_usd_for_sku(sku)
+        except Exception:  # noqa: BLE001
+            hourly_rate_usd = None
     payload = {
         "name": WORKER_NAME,
         "capabilities": {
@@ -212,12 +227,16 @@ def register_worker():
             "cuda_cores": cuda_cores,
             "location": LOCATION,
             "efficiency_runtime": efficiency_runtime,
+            "sku": sku,
+            "hourly_rate_usd": hourly_rate_usd,
         },
         "gpu": gpu_available,
         "gpu_name": gpu_name,
         "vram_gb": vram_gb,
         "memory_gb": memory_gb,
         "efficiency_runtime": efficiency_runtime,
+        "sku": sku,
+        "hourly_rate_usd": hourly_rate_usd,
         "cuda_cores": cuda_cores,
         "network_bandwidth_gbps": 1.0,
         "location": LOCATION,

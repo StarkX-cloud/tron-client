@@ -22,6 +22,8 @@ class WorkerCapacity:
     efficiency_runtime: bool
     latency_ms: float | None = None
     bandwidth_mbps: float | None = None
+    sku: str | None = None
+    hourly_rate_usd: float | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -73,12 +75,22 @@ class FleetCapacity:
             "total_memory_gb": self.total_memory_gb,
             "total_free_memory_gb": self.total_free_memory_gb,
             "workers": [w.to_dict() for w in self.workers],
+            "min_hourly_rate_usd": self.min_hourly_rate_usd,
             "limits_honestly": [
                 "capacity is only what registered workers report right now",
-                "does not provision cloud GPUs or claim distributed VRAM",
+                "dedicated provisioner is opt-in via TRON_DEDICATED_PROVISIONER",
                 "efficiency_runtime must be true on a worker to run real-model jobs there",
             ],
         }
+
+    @property
+    def min_hourly_rate_usd(self) -> float | None:
+        rates = [
+            w.hourly_rate_usd
+            for w in self.workers
+            if isinstance(w.hourly_rate_usd, (int, float))
+        ]
+        return min(rates) if rates else None
 
 
 def detect_efficiency_runtime() -> bool:
@@ -146,6 +158,12 @@ def query_fleet_capacity(
         free = w.get("free_memory_gb")
         if free is None and link and isinstance(link, dict):
             free = link.get("memory_gb")  # topology sometimes mirrors free mem
+        sku = w.get("sku") or caps.get("sku")
+        rate = w.get("hourly_rate_usd", caps.get("hourly_rate_usd"))
+        try:
+            rate_f = float(rate) if rate is not None else None
+        except (TypeError, ValueError):
+            rate_f = None
         out.append(
             WorkerCapacity(
                 name=name,
@@ -155,6 +173,8 @@ def query_fleet_capacity(
                 efficiency_runtime=efficiency,
                 latency_ms=(link or {}).get("latency_ms") if isinstance(link, dict) else None,
                 bandwidth_mbps=(link or {}).get("bandwidth_mbps") if isinstance(link, dict) else None,
+                sku=str(sku) if sku else None,
+                hourly_rate_usd=rate_f,
             )
         )
     return FleetCapacity(master_url=url, reachable=True, workers=out, error=None)

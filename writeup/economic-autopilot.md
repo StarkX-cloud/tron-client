@@ -108,19 +108,21 @@ not a hard-coded “always local” rule.
 spine event + `requeue_count >= 1`), second worker completes, original future
 resolves.
 
-## Remaining limitations
+## Production readiness (this iteration)
 
-1. Real-model Autopilot execution is **local-only** today; pooled real-model
-   needs workers that actually ship torch/transformers (not assumed).
-2. This development host has **no CUDA** — GPU Autopilot numbers are not
-   claimed here; re-run `--real-model` on a CUDA machine for VRAM metrics.
-3. Same-host `--live-pool` is not a multi-region fleet proof (real WAN tests
-   already exist for `tron_router` separately).
-4. Hourly rates are **user-configured**, not live cloud list prices.
-5. First-run cost predictions need history or `expected_runtime_seconds`
-   (cold Hub/cache loads skew the first trial).
-6. No malicious-worker defense on the pool path (`reliability=strict` excludes pool).
-7. Checkpoint recovery still unsupported for arbitrary callables.
+| Gap | Status |
+|---|---|
+| Queue `/submit` auth (`TRON_SUBMIT_AUTH_TOKEN`) | **Built** — opt-in; unset keeps local tests open |
+| Worker `auth_token` leaked on `GET /workers` | **Fixed** — redacted |
+| Autopilot HTTP API | **Built** — `tron_autopilot.api` (`/plan`, `/run`, `/fleet`, `/pricing/skus`) |
+| GPU SKU hourly table | **Built** — `tron_autopilot.pricing` (pinned snapshot) |
+| Workers advertise `sku` / `hourly_rate_usd` | **Built** — `TRON_WORKER_SKU`, `TRON_WORKER_HOURLY_RATE` |
+| `costtrace_task` ledger | **Wired** — compute $ recorded on execute |
+| Dedicated provisioner | **Built (opt-in)** — `TRON_DEDICATED_PROVISIONER=linode` |
+| CUDA Autopilot (410m T4) | **Proven** — artifact on PR |
+| CUDA 1.4b | Notebook ready — `scripts/cuda_colab_proof_1_4b.ipynb` |
+| Checkpoint arbitrary callables | Still unsupported (honest refuse) |
+| Untrusted multi-tenant sandbox | Still out of scope (containers/seccomp) |
 
 ## Real efficiency bridge (this iteration)
 
@@ -177,26 +179,35 @@ existing watchdog.
 | Real LLM body (Baseline/Offload) | **Built** (local; pooled when workers advertise) |
 | Cross-machine capacity visibility | **Built** (fleet snapshot) |
 | CUDA economics at 410m | **Proven** (Colab T4; see artifact) — 1.4b still open |
-| Auto-provision dedicated GPUs | **Not built** (flag only — by design, not a marketplace) |
-| Multi-tenant untrusted rental | **Out of scope** (removed) |
+| Auto-provision dedicated nodes | **Built (opt-in Linode)** — destroys after run |
+| HTTP control plane for companies | **Built** (`uvicorn tron_autopilot.api:app`) |
+| Multi-tenant untrusted rental | **Out of scope** (needs container isolation) |
 
-**Honest product read:** TRON is the control plane AI teams pay for when
-they already have (or will attach) machines. “Without limits” means *the
-coordinator never pretends a limit isn’t there — and routes around it when
-capacity exists*. Unlimited *supply* still requires attaching more workers
-or external provisioners; TRON does not fake that.
+**Product read:** TRON is the control plane AI teams plug into — plan/run over
+HTTP, attach workers (or opt-in provision), measure cost, recover failures.
+“Without limits” = never invent capacity; expand by attaching/provisioning real
+machines. Supply scales with your fleet + provisioner.
 
-## Recommended next engineering milestone
+### Integrate (company path)
 
-**CUDA fleet proof:** run Autopilot `--real-model` against a pool of GPU
-workers advertising `efficiency_runtime`, on `pythia-410m`/`1.4b`, with
-peak VRAM in metrics — same honesty bar as
-`writeup/compute-efficiency-gpu-validation.md`.
+```bash
+# Master
+TRON_SUBMIT_AUTH_TOKEN=… uvicorn queue_server:app --port 9000
+
+# Worker(s)
+TRON_MASTER_URL=http://master:9000 TRON_WORKER_SKU=g2-gpu-rtx4000a1-s \
+  TRON_SUBMIT_AUTH_TOKEN=… python worker.py
+
+# Autopilot API
+TRON_AUTOPILOT_API_TOKEN=… uvicorn tron_autopilot.api:app --port 9100
+# POST /plan  POST /run  GET /fleet
+```
 
 ### CUDA proof paths (status)
 
 | Path | Status |
 |---|---|
-| `scripts/cuda_colab_proof.ipynb` | **Done** — Colab Tesla T4; artifact `artifacts/economic_autopilot_cuda_benchmark.json`. |
-| `scripts/cuda_linode_proof.py` | Token works; **GPU plans account-gated** (HTTP 400). CPU Nanode create/delete OK. |
-| `scripts/linode_request_gpu_access.py` | Needs PAT **Account: Read/Write** (or Cloud Manager → Support for `g2-gpu-rtx4000a1-s`). |
+| `scripts/cuda_colab_proof.ipynb` | **Done** — T4 / pythia-410m artifact |
+| `scripts/cuda_colab_proof_1_4b.ipynb` | Ready — run on Colab T4 for 1.4b |
+| `scripts/cuda_linode_proof.py` | GPU plans account-gated; CPU Nanode OK |
+| `TRON_DEDICATED_PROVISIONER=linode` | Opt-in attach + teardown |

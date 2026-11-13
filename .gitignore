@@ -15,3 +15,5 @@ tron_*.db
 .tron_spine/
 .tron_spine*/
 .tron_efficiency_results/
+tron_autopilot_decisions.jsonl
+tron_costtrace_log.jsonl

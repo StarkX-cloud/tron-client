@@ -12,6 +12,8 @@ second submission protocol.
 
 from __future__ import annotations
 
+import os
+
 import requests
 from requests.exceptions import RequestException
 
@@ -82,8 +84,18 @@ def submit_to_pool(
     if required_memory_gb is not None:
         submit_payload["required_memory_gb"] = required_memory_gb
 
+    headers = {}
+    submit_token = os.environ.get("TRON_SUBMIT_AUTH_TOKEN") or None
+    if submit_token:
+        headers["X-TRON-AUTH"] = submit_token
+
     try:
-        response = requests.post(f"{url}/submit", json=submit_payload, timeout=timeout_seconds)
+        response = requests.post(
+            f"{url}/submit",
+            json=submit_payload,
+            headers=headers or None,
+            timeout=timeout_seconds,
+        )
         response.raise_for_status()
         data = response.json()
     except RequestException as exc:

@@ -293,11 +293,14 @@ class EconomicAutopilot:
             )
 
         # --- pooled ---
-        pool_rate = (
-            spec.pooled_hourly_rate_usd
-            if spec.pooled_hourly_rate_usd is not None
-            else spec.hourly_rate_usd
-        )
+        # Prefer explicit pooled rate → cheapest advertised worker rate → local rate.
+        advertised_pool = getattr(status, "min_hourly_rate_usd", None)
+        if spec.pooled_hourly_rate_usd is not None:
+            pool_rate = spec.pooled_hourly_rate_usd
+        elif isinstance(advertised_pool, (int, float)):
+            pool_rate = float(advertised_pool)
+        else:
+            pool_rate = spec.hourly_rate_usd
         p_rt, p_src = self._predicted_runtime(
             spec, "pooled", local_rec.policy, local_rec.device, local_rec.dtype
         )
