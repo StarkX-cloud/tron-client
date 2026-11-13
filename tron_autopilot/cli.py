@@ -51,6 +51,7 @@ def cmd_run(args) -> int:
         ),
         master_url=args.master_url,
         max_new_tokens=args.max_new_tokens,
+        requires_efficiency_runtime=bool(args.real_model),
     )
     ap = EconomicAutopilot()
     plan = ap.plan(spec, strategy=args.strategy)

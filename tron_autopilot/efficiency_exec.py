@@ -84,16 +84,12 @@ def run_efficiency_workload(plan: WorkloadPlan, strategy: str = "autopilot") -> 
             predicted_cost_usd=chosen.predicted_cost_usd,
             predicted_peak_memory_bytes=chosen.predicted_peak_memory_bytes,
             error=(
-                "efficiency workload path currently executes locally only — "
-                "pooled workers are not assumed to have torch/transformers. "
-                "Use a callable + submit_to_pool for pooled jobs, or choose local."
+                "run_efficiency_workload is local-only; use execute_plan("
+                "efficiency=True) which routes pooled plans through "
+                "pooled_efficiency.run_efficiency_job on efficiency_runtime workers"
             ),
             decision_rationale=list(plan.rationale) + list(chosen.rationale),
-            warnings=list(plan.warnings)
-            + [
-                "real-model Autopilot execution is local-only until pool workers "
-                "advertise an efficiency runtime (not claimed here)"
-            ],
+            warnings=list(plan.warnings),
             timestamp=now(),
         )
 

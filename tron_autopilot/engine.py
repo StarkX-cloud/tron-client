@@ -320,6 +320,19 @@ class EconomicAutopilot:
                 f"pool has {status.alive_worker_count} alive worker(s), "
                 f"{status.total_reported_memory_gb:.1f}GB reported"
             )
+            eff_count = getattr(status, "efficiency_worker_count", 0) or 0
+            if eff_count:
+                p_rationale.append(
+                    f"{eff_count} worker(s) advertise efficiency_runtime "
+                    "(can run real tron_efficiency model jobs)"
+                )
+            if spec.requires_efficiency_runtime and eff_count <= 0:
+                p_feasible = False
+                p_reasons.append(
+                    "requires_efficiency_runtime but no alive worker advertised "
+                    "efficiency_runtime=True — refusing to pretend the pool can "
+                    "run torch/transformers jobs"
+                )
             if required_gb is not None and status.total_reported_memory_gb < required_gb:
                 # Soft signal: total fleet memory < job need. Not a hard reject
                 # if a single large worker might still fit — but we don't get

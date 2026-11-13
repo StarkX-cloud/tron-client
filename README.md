@@ -395,6 +395,11 @@ python3 -m tron_autopilot.cli bench --real-model --trials 2 --max-new-tokens 8
 `requirements-training.txt`). CUDA is used only when
 `detect_hardware()` reports a GPU — this path never fabricates VRAM wins.
 
+Workers advertise `efficiency_runtime` when they can import
+torch/transformers/accelerate; Autopilot will not pool real-model jobs
+onto workers that never claimed that. Fleet snapshot:
+`tron_autopilot.fleet.query_fleet_capacity`.
+
 A workload carries budget, deadline, and reliability. Autopilot builds
 feasible candidates (local / pooled / dedicated-flag), picks by strategy
 (`autopilot` = min expected cost among feasible; `fixed` = local baseline;

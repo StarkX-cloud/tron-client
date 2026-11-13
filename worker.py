@@ -174,18 +174,50 @@ def save_auth_token(token):
     AUTH_TOKEN_FILE.write_text(json.dumps({"auth_token": token, "worker_name": WORKER_NAME}))
 
 
+def _detect_efficiency_runtime() -> bool:
+    try:
+        import accelerate  # noqa: F401
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _reportable_memory_gb(gpu_available: bool, vram_gb) -> float:
+    """Prefer VRAM when a GPU is present; otherwise report system RAM.
+
+    Reporting 0 on CPU-only hosts made the matcher's memory_fits filter
+    reject every real-model job — a false "no capacity" signal.
+    """
+    if gpu_available and isinstance(vram_gb, (int, float)) and vram_gb > 0:
+        return float(vram_gb)
+    try:
+        import psutil
+
+        return float(psutil.virtual_memory().total) / 1_000_000_000.0
+    except Exception:
+        return float(vram_gb or 4)
+
+
 def register_worker():
     gpu_available, gpu_name, vram_gb, cuda_cores = detect_gpu()
+    memory_gb = _reportable_memory_gb(gpu_available, vram_gb)
+    efficiency_runtime = _detect_efficiency_runtime()
     payload = {
         "name": WORKER_NAME,
         "capabilities": {
             "gpu": gpu_available,
-            "memory_gb": vram_gb,
+            "memory_gb": memory_gb,
             "cuda_cores": cuda_cores,
             "location": LOCATION,
+            "efficiency_runtime": efficiency_runtime,
         },
+        "gpu": gpu_available,
         "gpu_name": gpu_name,
         "vram_gb": vram_gb,
+        "memory_gb": memory_gb,
+        "efficiency_runtime": efficiency_runtime,
         "cuda_cores": cuda_cores,
         "network_bandwidth_gbps": 1.0,
         "location": LOCATION,

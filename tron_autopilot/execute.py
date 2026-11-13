@@ -53,6 +53,47 @@ def execute_plan(
     Baseline/Offload path through ``tron_efficiency.workloads.runner``.
     """
     if efficiency and func is None:
+        if plan.chosen is not None and plan.chosen.target == "pooled":
+            from tron_autopilot.pooled_efficiency import run_efficiency_job
+
+            # Submit the real-model job to a worker that advertised
+            # efficiency_runtime. Watchdog recovery stays on queue_server.
+            outcome = execute_plan(
+                plan,
+                func=run_efficiency_job,
+                func_kwargs={
+                    "model_name": plan.spec.model_name,
+                    "policy": plan.chosen.policy or "baseline",
+                    "device": plan.chosen.device or "cpu",
+                    "dtype": plan.chosen.dtype,
+                    "memory_budget_bytes": plan.chosen.memory_budget_bytes,
+                    "max_new_tokens": plan.spec.max_new_tokens,
+                    "prompt": plan.spec.prompt,
+                    "hourly_rate_usd": plan.chosen.hourly_rate_usd,
+                },
+                wait_timeout_seconds=wait_timeout_seconds,
+                poll_interval_seconds=poll_interval_seconds,
+                strategy=strategy,
+                efficiency=False,
+            )
+            # Normalize worker dict result into metrics when present.
+            if isinstance(outcome.result, dict) and outcome.result.get("metrics"):
+                outcome.metrics = dict(outcome.result.get("metrics") or {})
+                if outcome.result.get("actual_runtime_seconds") is not None:
+                    outcome.actual_runtime_seconds = float(
+                        outcome.result["actual_runtime_seconds"]
+                    )
+                if outcome.result.get("actual_peak_memory_bytes") is not None:
+                    outcome.actual_peak_memory_bytes = outcome.result[
+                        "actual_peak_memory_bytes"
+                    ]
+                if outcome.result.get("actual_cost_usd") is not None:
+                    outcome.actual_cost_usd = outcome.result["actual_cost_usd"]
+                if outcome.result.get("success") is False:
+                    outcome.success = False
+                    outcome.error = outcome.result.get("error") or outcome.error
+            return outcome
+
         from tron_autopilot.efficiency_exec import run_efficiency_workload
 
         return run_efficiency_workload(plan, strategy=strategy)

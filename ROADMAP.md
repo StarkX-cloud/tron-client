@@ -323,10 +323,13 @@ technical design behind each phase.
   history. CPU pythia-70m results preserved under
   `artifacts/economic_autopilot_real_model_benchmark.json`. Local-only
   for real models (pool not assumed to have torch).
-- [ ] **Next milestone:** same `--real-model` path on real CUDA
-  (pythia-410m/1.4b), confirm `device=cuda` + peak VRAM metrics, optional
-  worker efficiency-runtime advertisement for honest pooled real-model
-  runs (see `writeup/economic-autopilot.md`).
+- [x] **Fleet efficiency_runtime + capacity snapshot:** workers report
+  RAM (not 0) on CPU hosts and advertise efficiency_runtime; Autopilot
+  `requires_efficiency_runtime` + `pooled_efficiency.run_efficiency_job`;
+  `tron_autopilot.fleet.query_fleet_capacity`.
+- [ ] **Next milestone:** Autopilot `--real-model` on a CUDA worker pool
+  (pythia-410m/1.4b) with peak VRAM metrics
+  (see `writeup/economic-autopilot.md`).
 - [x] `tron/gpu/` OpenAI-compatible gateway now has `tron/gpu/README.md`
   documenting the `tron.gpu.*` layout (cluster / runtime / scheduler /
   openai_bridge), how to run the bridge (with the mocked-proxy test

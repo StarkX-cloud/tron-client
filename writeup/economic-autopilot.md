@@ -143,11 +143,39 @@ Local-only for real models: pool workers are not assumed to ship
 torch/transformers (stated in outcomes if a pooled plan is asked to run
 efficiency).
 
+## Fleet capacity (toward “Computing Without Limits”)
+
+Workers now advertise `efficiency_runtime` (torch/transformers/accelerate
+importable) and report **system RAM** when they have no GPU (so the matcher
+stops seeing CPU nodes as 0 GB). `tron_autopilot.fleet.query_fleet_capacity`
+summarizes measured fleet memory/GPU/efficiency workers. Autopilot’s
+`requires_efficiency_runtime` refuses to pool real-model jobs onto workers
+that never claimed that capability. Pooled real-model execution goes through
+`pooled_efficiency.run_efficiency_job` on those workers; recovery remains the
+existing watchdog.
+
+### Scorecard vs “Computing Without Limits”
+
+| Layer | Status |
+|---|---|
+| Decide where/how under budget+deadline+reliability | **Built** (Autopilot) |
+| Memory-fit + recovery on unreliable nodes | **Built** |
+| Measured cost feedback | **Built** |
+| Real LLM body (Baseline/Offload) | **Built** (local; pooled when workers advertise) |
+| Cross-machine capacity visibility | **Built** (fleet snapshot) |
+| CUDA economics at 410m/1.4b | **Not on this host** — re-run on GPU |
+| Auto-provision dedicated GPUs | **Not built** (flag only — by design, not a marketplace) |
+| Multi-tenant untrusted rental | **Out of scope** (removed) |
+
+**Honest product read:** TRON is the control plane AI teams pay for when
+they already have (or will attach) machines. “Without limits” means *the
+coordinator never pretends a limit isn’t there — and routes around it when
+capacity exists*. Unlimited *supply* still requires attaching more workers
+or external provisioners; TRON does not fake that.
+
 ## Recommended next engineering milestone
 
-**Same Autopilot path on real CUDA:** re-run `--real-model` on a T4 (or
-similar) with `pythia-410m` / `1.4b`, confirm advisor selects `device=cuda`,
-capture peak VRAM in `metrics`, and publish fixed/cheapest/autopilot with
-the honesty bar of `writeup/compute-efficiency-gpu-validation.md`. Optional
-follow-on: advertise efficiency runtime on workers so pooled real-model
-execution is honest rather than assumed.
+**CUDA fleet proof:** run Autopilot `--real-model` against a pool of GPU
+workers advertising `efficiency_runtime`, on `pythia-410m`/`1.4b`, with
+peak VRAM in metrics — same honesty bar as
+`writeup/compute-efficiency-gpu-validation.md`.

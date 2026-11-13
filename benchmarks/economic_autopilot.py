@@ -376,6 +376,7 @@ def _run_real_model_benchmark(
                 reliability="tolerant",
                 expected_runtime_seconds=None,  # learn from measured history only
                 max_new_tokens=max_new_tokens,
+                requires_efficiency_runtime=True,
             )
             plan, outcome = run_strategy(
                 autopilot,

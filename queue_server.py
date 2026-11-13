@@ -324,14 +324,21 @@ def register_worker(worker: dict):
     auth_token = str(uuid.uuid4().hex)
 
     with lock:
+        caps = worker.get("capabilities") if isinstance(worker.get("capabilities"), dict) else {}
         workers[worker_name] = {
             "name": worker_name,
             "auth_token": auth_token,
-            "gpu": worker.get("gpu") or worker.get("capabilities", {}).get("gpu", False),
+            "gpu": worker.get("gpu") or caps.get("gpu", False),
             "gpu_name": worker.get("gpu_name"),
-            "memory_gb": worker.get("memory_gb") or worker.get("capabilities", {}).get("memory_gb", 4),
-            "cuda_cores": worker.get("cuda_cores") or worker.get("capabilities", {}).get("cuda_cores", 1024),
+            "memory_gb": worker.get("memory_gb") or caps.get("memory_gb", 4),
+            "cuda_cores": worker.get("cuda_cores") or caps.get("cuda_cores", 1024),
             "location": worker.get("location", "unknown"),
+            # Real-model Autopilot path: worker must advertise that torch/
+            # transformers/accelerate are importable here — never assumed.
+            "efficiency_runtime": bool(
+                worker.get("efficiency_runtime", caps.get("efficiency_runtime", False))
+            ),
+            "capabilities": caps,
             "load": 0,
             "status": "idle",
             "last_heartbeat": time.time()

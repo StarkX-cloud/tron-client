@@ -14,6 +14,7 @@ See ``writeup/economic-autopilot.md`` for architecture and honest limits.
 from __future__ import annotations
 
 from tron_autopilot.engine import EconomicAutopilot
+from tron_autopilot.fleet import FleetCapacity, query_fleet_capacity
 from tron_autopilot.types import ExecutionOutcome, WorkloadPlan, WorkloadSpec
 
 __all__ = [
@@ -21,4 +22,6 @@ __all__ = [
     "WorkloadSpec",
     "WorkloadPlan",
     "ExecutionOutcome",
+    "FleetCapacity",
+    "query_fleet_capacity",
 ]

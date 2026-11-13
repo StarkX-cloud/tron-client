@@ -40,6 +40,9 @@ class WorkloadSpec:
     # Efficiency-workload knobs (used when executing via tron_efficiency).
     prompt: str = "The quick brown fox jumps over the lazy dog, and"
     max_new_tokens: int = 32
+    # When True, pooled candidates require workers that advertised
+    # efficiency_runtime (torch/transformers/accelerate).
+    requires_efficiency_runtime: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
