@@ -1,0 +1,84 @@
+{
+  "success": true,
+  "target": "distributed",
+  "error": null,
+  "expected_total": 41654167500,
+  "got_total": 41654167500,
+  "correct": true,
+  "actual_runtime_seconds": 1.025058279999996,
+  "wall_seconds": 1.025691270828247,
+  "actual_cost_usd": 2.135538083333325e-06,
+  "predicted_runtime_seconds": 15.006131758678206,
+  "predicted_cost_usd": 3.1262774497246264e-05,
+  "metrics": {
+    "distributed": true,
+    "n_shards": 2,
+    "attempts_total": 2,
+    "duplicates_suppressed": 0,
+    "comm_predicted_seconds": 0.006131758678205782,
+    "actual_comm_seconds": 0.006131758678205782,
+    "comm_seconds_basis": "predicted_cost_model",
+    "expected_total": 41654167500,
+    "got_total": 41654167500
+  },
+  "recovery": {
+    "mechanism": "per_shard_retry_plus_queue_watchdog",
+    "shard_requeues": [
+      0,
+      0
+    ],
+    "duplicates_suppressed": 0
+  },
+  "n_items": 5000,
+  "alive_workers": 2,
+  "pool_status": {
+    "reachable": true,
+    "master_url": "http://127.0.0.1:9000",
+    "alive_worker_count": 2,
+    "total_reported_memory_gb": 2.0,
+    "checked_worker_count": 2,
+    "error": null,
+    "measured_links": {
+      "dist-w0": {
+        "latency_ms": 3.311049485206604,
+        "bandwidth_mbps": 992.7590104351457,
+        "free_memory_gb": null
+      },
+      "dist-w1": {
+        "latency_ms": 2.5420022010803223,
+        "bandwidth_mbps": 1303.5594119829573,
+        "free_memory_gb": null
+      }
+    },
+    "efficiency_worker_count": 0,
+    "total_free_memory_gb": null,
+    "min_hourly_rate_usd": 0.0075
+  },
+  "decision_rationale": [
+    "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+    "strategy='autopilot' chose distributed-map (target=distributed, predicted_cost_usd=3.1262774497246264e-05)",
+    "serial runtime source: measured_history_mean",
+    "using measured avg latency 2.9ms \u00d7 2 rounds \u2248 0.006s coordination (concurrent submits)",
+    "transfer ~40000B at 1148.16Mbps \u2248 0.000s",
+    "serial 30.000s \u2192 ~15.000s compute/shard + 0.006s comm = 15.006s wall (speedup 2.00x, threshold 1.15x)",
+    "parallelization predicted beneficial after communication cost",
+    "serial runtime source: measured_history_mean",
+    "using measured avg latency 2.9ms \u00d7 2 rounds \u2248 0.006s coordination (concurrent submits)",
+    "transfer ~40000B at 1148.16Mbps \u2248 0.000s",
+    "serial 30.000s \u2192 ~15.000s compute/shard + 0.006s comm = 15.006s wall (speedup 2.00x, threshold 1.15x)",
+    "parallelization predicted beneficial after communication cost"
+  ],
+  "hosts": [
+    "172.104.210.172",
+    "66.175.215.40"
+  ],
+  "linode_ids": [
+    110961884,
+    110961887
+  ],
+  "type": "g6-nanode-1",
+  "region": "us-east",
+  "multi_machine": true,
+  "same_host_simulation": false,
+  "destroyed": true
+}

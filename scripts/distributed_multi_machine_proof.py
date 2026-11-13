@@ -111,13 +111,97 @@ def ssh(key: Path, host: str, command: str, timeout: int = 1800) -> str:
         "-o",
         "UserKnownHostsFile=/dev/null",
         "-o",
+        "LogLevel=ERROR",
+        "-o",
         "ConnectTimeout=20",
         f"root@{host}",
         command,
     ]
     print(f"[dist-proof] ssh root@{host}: {command[:100]}…")
-    out = subprocess.check_output(cmd, timeout=timeout, stderr=subprocess.STDOUT)
+    try:
+        out = subprocess.check_output(cmd, timeout=timeout, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as exc:
+        body = (exc.output or b"").decode("utf-8", errors="replace")
+        print(
+            f"[dist-proof] SSH FAILED exit={exc.returncode} host={host}\n{body[-4000:]}",
+            file=sys.stderr,
+        )
+        raise
     return out.decode("utf-8", errors="replace")
+
+
+def dump_remote_logs(key: Path, hosts: list[str]) -> None:
+    """Best-effort diagnostics before destroy (billing-safe)."""
+    for i, host in enumerate(hosts):
+        for path in (
+            "/var/log/tron-master.log",
+            "/var/log/tron-worker0.log",
+            "/var/log/tron-worker1.log",
+        ):
+            try:
+                out = ssh(
+                    key,
+                    host,
+                    f"test -f {path} && tail -n 80 {path} || true",
+                    timeout=30,
+                )
+                if out.strip():
+                    print(f"[dist-proof] --- node{i} {path} ---\n{out[-2000:]}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[dist-proof] log dump {host} {path}: {exc}", file=sys.stderr)
+    try:
+        out = ssh(
+            key,
+            hosts[0],
+            "curl -sf http://127.0.0.1:9000/workers || true",
+            timeout=30,
+        )
+        print(f"[dist-proof] /workers on node0:\n{out[:1500]}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[dist-proof] workers dump failed: {exc}", file=sys.stderr)
+
+
+def wait_for_two_workers(key: Path, master_host: str, timeout: int = 180) -> None:
+    """Poll master until two distinct alive workers are registered."""
+    deadline = time.time() + timeout
+    last = ""
+    while time.time() < deadline:
+        try:
+            last = ssh(
+                key,
+                master_host,
+                "curl -sf http://127.0.0.1:9000/workers || echo FAIL",
+                timeout=30,
+            )
+            print(f"[dist-proof] workers poll: {last[:800]}")
+            # Strip any SSH chatter before JSON body.
+            body = last
+            brace = body.find("{")
+            bracket = body.find("[")
+            starts = [i for i in (brace, bracket) if i >= 0]
+            if starts:
+                body = body[min(starts) :]
+            data = json.loads(body)
+            # /workers returns {name: {...}, ...}
+            if isinstance(data, dict):
+                names = {str(k) for k in data.keys() if k}
+            elif isinstance(data, list):
+                names = {
+                    str(w.get("name") or w.get("worker_name") or "")
+                    for w in data
+                    if isinstance(w, dict)
+                }
+                names.discard("")
+            else:
+                names = set()
+            if len(names) >= 2:
+                print(f"[dist-proof] saw {len(names)} workers: {sorted(names)}")
+                return
+            print(f"[dist-proof] only {len(names)} worker(s) yet: {sorted(names)}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[dist-proof] workers poll err: {exc}")
+        time.sleep(5)
+    die(f"never saw 2 workers on master; last={last[:800]}")
 
 
 def create_instance(label: str, pub: str, root_pass: str) -> dict:
@@ -215,7 +299,7 @@ def run_distributed_on_master(key: Path, host: str) -> dict:
     # Write + run a small driver that uses Autopilot distributed path.
     remote = "/tmp/dist_proof_driver.py"
     driver = f'''
-import json, time
+import json, time, traceback
 from dataclasses import replace
 from tron_efficiency.advisor.recommend import Recommendation
 from tron_efficiency.hardware.detect import HardwareInfo
@@ -227,117 +311,152 @@ from tron_autopilot.distributed.ops import closed_form_sum_squares
 from tron_autopilot.store import RuntimeHistory
 
 master = "http://127.0.0.1:9000"
-deadline = time.time() + 180
-status = None
-while time.time() < deadline:
-    status = query_pool_status(master)
-    print("alive", status.alive_worker_count, "reachable", status.reachable)
-    if status.reachable and status.alive_worker_count >= 2:
-        break
-    time.sleep(2)
-else:
-    raise SystemExit("never saw 2 alive workers")
+report = {{"success": False, "correct": False, "error": None}}
+try:
+    deadline = time.time() + 180
+    status = None
+    while time.time() < deadline:
+        status = query_pool_status(master)
+        print(
+            "alive",
+            status.alive_worker_count,
+            "reachable",
+            status.reachable,
+            flush=True,
+        )
+        if status.reachable and status.alive_worker_count >= 2:
+            break
+        time.sleep(2)
+    else:
+        raise SystemExit("never saw 2 alive workers")
 
-n = {N_ITEMS}
-items = list(range(n))
-serial = 30.0
+    n = {N_ITEMS}
+    items = list(range(n))
+    serial = 30.0
 
-rec = Recommendation(
-    model_name="dist/proof",
-    estimated_param_count=1000,
-    param_count_is_estimate=True,
-    device="cpu",
-    dtype="fp32",
-    policy="baseline",
-    memory_budget_bytes=None,
-    confidence="medium",
-    rationale=["dist proof stub — no HF download"],
-    warnings=[],
-)
-hw = HardwareInfo(
-    platform="linux",
-    python_version="3.10",
-    cpu_count=1,
-    cpu_total_memory_bytes=1 * 1024**3,
-    cuda_available=False,
-    torch_version=None,
-    gpus=[],
-    warnings=[],
-)
-
-def recommend_fn(*a, **k):
-    return rec
-
-def decide_fn(job, hardware=None, pool_status=None, master_url=None):
-    return PlacementDecision(
-        target="pooled",
+    # Stub advisor/hardware so Nanode proof does not need transformers/HF.
+    rec = Recommendation(
+        model_name="dist/proof",
+        estimated_param_count=1000,
+        param_count_is_estimate=True,
+        device="cpu",
+        dtype="fp32",
+        policy="baseline",
+        memory_budget_bytes=None,
         confidence="medium",
-        rationale=["dist proof"],
-        local_recommendation=rec.to_dict(),
-        pool_status=status.to_dict(),
-        required_memory_gb=0.25,
+        rationale=["dist proof stub — no HF download"],
+        warnings=[],
+    )
+    hw = HardwareInfo(
+        platform="linux",
+        python_version="3.10",
+        cpu_count=1,
+        cpu_total_memory_bytes=1 * 1024**3,
+        cuda_available=False,
+        torch_version=None,
+        gpus=[],
+        warnings=[],
     )
 
-ap = EconomicAutopilot(
-    log_path="/tmp/dist_decisions.jsonl",
-    history_path="/tmp/dist_history.json",
-    hardware=hw,
-    recommend_fn=recommend_fn,
-    decide_placement_fn=decide_fn,
-    query_pool_status_fn=lambda master_url=None: status,
-)
-hist_key = RuntimeHistory.key("dist/proof", "local", "baseline", "cpu", "fp32")
-ap.history.record(hist_key, serial)
+    def recommend_fn(*a, **k):
+        return rec
 
-spec = WorkloadSpec(
-    model_name="dist/proof",
-    hourly_rate_usd={HOURLY},
-    pooled_hourly_rate_usd={HOURLY},
-    master_url=master,
-    parallelizable=True,
-    partition_items=items,
-    map_op="sum_squares",
-    expected_runtime_seconds=serial,
-    bytes_per_item=8.0,
-    reliability="tolerant",
-)
-plan = ap.plan(spec, pool_status=status, strategy="autopilot")
-chosen = plan.chosen.target if plan.chosen else None
-dist = next(c for c in plan.candidates if c.target == "distributed")
-print("chosen", chosen, "dist_feasible", dist.feasible, dist.rejection_reasons)
-if not dist.feasible:
-    raise SystemExit("distributed not feasible: " + str(dist.rejection_reasons))
-if plan.chosen is None or plan.chosen.target != "distributed":
-    plan = replace(plan, chosen=replace(dist, feasible=True))
+    def decide_fn(job, hardware=None, pool_status=None, master_url=None):
+        return PlacementDecision(
+            target="pooled",
+            confidence="medium",
+            rationale=["dist proof"],
+            local_recommendation=rec.to_dict(),
+            pool_status=status.to_dict(),
+            required_memory_gb=0.1,
+        )
 
-t0 = time.time()
-outcome = execute_plan(plan, strategy="autopilot", wait_timeout_seconds=300)
-wall = time.time() - t0
-expected = closed_form_sum_squares(n)
-got = (outcome.metrics or {{}}).get("got_total")
-report = {{
-    "success": outcome.success,
-    "target": outcome.target,
-    "error": outcome.error,
-    "expected_total": expected,
-    "got_total": got,
-    "correct": got == expected,
-    "actual_runtime_seconds": outcome.actual_runtime_seconds,
-    "wall_seconds": wall,
-    "actual_cost_usd": outcome.actual_cost_usd,
-    "predicted_runtime_seconds": outcome.predicted_runtime_seconds,
-    "predicted_cost_usd": outcome.predicted_cost_usd,
-    "metrics": outcome.metrics,
-    "recovery": outcome.recovery,
-    "n_items": n,
-    "alive_workers": status.alive_worker_count,
-    "pool_status": status.to_dict(),
-    "decision_rationale": outcome.decision_rationale[:12],
-}}
-print(json.dumps(report))
-open("/tmp/distributed_multi_machine_proof.json","w").write(json.dumps(report, indent=2))
-if not outcome.success or got != expected:
-    raise SystemExit("proof failed")
+    ap = EconomicAutopilot(
+        log_path="/tmp/dist_decisions.jsonl",
+        history_path="/tmp/dist_history.json",
+        hardware=hw,
+        recommend_fn=recommend_fn,
+        decide_placement_fn=decide_fn,
+        query_pool_status_fn=lambda master_url=None: status,
+    )
+    hist_key = RuntimeHistory.key("dist/proof", "local", "baseline", "cpu", "fp32")
+    ap.history.record(hist_key, serial)
+
+    spec = WorkloadSpec(
+        model_name="dist/proof",
+        hourly_rate_usd={HOURLY},
+        pooled_hourly_rate_usd={HOURLY},
+        master_url=master,
+        parallelizable=True,
+        partition_items=items,
+        map_op="sum_squares",
+        expected_runtime_seconds=serial,
+        bytes_per_item=8.0,
+        reliability="tolerant",
+    )
+    plan = ap.plan(spec, pool_status=status, strategy="autopilot")
+    chosen = plan.chosen.target if plan.chosen else None
+    dist = next(c for c in plan.candidates if c.target == "distributed")
+    print(
+        "chosen",
+        chosen,
+        "dist_feasible",
+        dist.feasible,
+        dist.rejection_reasons,
+        flush=True,
+    )
+    if not dist.feasible:
+        raise SystemExit("distributed not feasible: " + str(dist.rejection_reasons))
+    # Force distributed if autopilot picked local due to tiny Nanode rates.
+    if plan.chosen is None or plan.chosen.target != "distributed":
+        plan = replace(
+            plan,
+            chosen=replace(dist, feasible=True, required_memory_gb=0.1),
+        )
+    else:
+        plan = replace(
+            plan,
+            chosen=replace(plan.chosen, required_memory_gb=0.1),
+        )
+
+    t0 = time.time()
+    outcome = execute_plan(plan, strategy="autopilot", wait_timeout_seconds=300)
+    wall = time.time() - t0
+    expected = closed_form_sum_squares(n)
+    got = (outcome.metrics or {{}}).get("got_total")
+    report = {{
+        "success": outcome.success,
+        "target": outcome.target,
+        "error": outcome.error,
+        "expected_total": expected,
+        "got_total": got,
+        "correct": got == expected,
+        "actual_runtime_seconds": outcome.actual_runtime_seconds,
+        "wall_seconds": wall,
+        "actual_cost_usd": outcome.actual_cost_usd,
+        "predicted_runtime_seconds": outcome.predicted_runtime_seconds,
+        "predicted_cost_usd": outcome.predicted_cost_usd,
+        "metrics": outcome.metrics,
+        "recovery": outcome.recovery,
+        "n_items": n,
+        "alive_workers": status.alive_worker_count,
+        "pool_status": status.to_dict(),
+        "decision_rationale": list(outcome.decision_rationale or [])[:12],
+    }}
+    print(json.dumps(report), flush=True)
+    open("/tmp/distributed_multi_machine_proof.json", "w").write(
+        json.dumps(report, indent=2)
+    )
+    if not outcome.success or got != expected:
+        raise SystemExit("proof failed: " + str(outcome.error))
+except BaseException as exc:
+    report["error"] = f"{{type(exc).__name__}}: {{exc}}"
+    report["traceback"] = traceback.format_exc()
+    open("/tmp/distributed_multi_machine_proof.json", "w").write(
+        json.dumps(report, indent=2)
+    )
+    print(report["traceback"], flush=True)
+    raise
 '''
     # Escape for remote write via python -c is messy; use heredoc over ssh.
     b64 = __import__("base64").b64encode(driver.encode()).decode()
@@ -347,14 +466,31 @@ if not outcome.success or got != expected:
         f"python3 -c \"import base64; open('{remote}','wb').write(base64.b64decode('{b64}'))\"",
         timeout=60,
     )
-    out = ssh(
-        key,
-        host,
-        "cd /opt/tron-client && . .venv/bin/activate && python3 "
-        + remote,
-        timeout=600,
-    )
-    print(out[-2000:])
+    try:
+        # Driver lives in /tmp; PYTHONPATH must include the cloned repo or
+        # imports of tron_autopilot fail (venv only has requirements.txt).
+        out = ssh(
+            key,
+            host,
+            "cd /opt/tron-client && . .venv/bin/activate && "
+            "PYTHONPATH=/opt/tron-client python3 "
+            + remote,
+            timeout=600,
+        )
+        print(out[-2000:])
+    except subprocess.CalledProcessError:
+        try:
+            raw_fail = ssh(
+                key,
+                host,
+                "cat /tmp/distributed_multi_machine_proof.json 2>/dev/null || true",
+                timeout=60,
+            )
+            if raw_fail.strip():
+                print(f"[dist-proof] remote failure report:\n{raw_fail[:3000]}")
+        except Exception:  # noqa: BLE001
+            pass
+        raise
     # Fetch JSON
     raw = ssh(key, host, "cat /tmp/distributed_multi_machine_proof.json", timeout=60)
     return json.loads(raw)
@@ -400,12 +536,27 @@ def main() -> int:
             key,
             hosts[0],
             "command -v ufw >/dev/null && ufw allow 9000/tcp || true; "
-            "ss -lntp | grep 9000 || true",
+            "command -v ufw >/dev/null && ufw status || true; "
+            "ss -lntp | grep 9000 || true; "
+            "iptables -L INPUT -n 2>/dev/null | head -n 20 || true",
             timeout=60,
         )
         start_worker1(key, hosts[1], hosts[0])
+        # Confirm remote worker can reach master before Autopilot run.
+        ssh(
+            key,
+            hosts[1],
+            f"curl -sf --max-time 10 http://{hosts[0]}:9000/workers | head -c 800 "
+            f"|| echo REMOTE_REACH_FAIL",
+            timeout=60,
+        )
+        wait_for_two_workers(key, hosts[0], timeout=180)
 
-        report = run_distributed_on_master(key, hosts[0])
+        try:
+            report = run_distributed_on_master(key, hosts[0])
+        except Exception:
+            dump_remote_logs(key, hosts)
+            raise
         report["hosts"] = hosts
         report["linode_ids"] = ids
         report["type"] = TYPE

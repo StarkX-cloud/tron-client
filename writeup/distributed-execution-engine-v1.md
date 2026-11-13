@@ -42,6 +42,22 @@ Autopilot still chooses among **local | pooled | distributed** by predicted cost
 
 Requires `LINODE_TOKEN` (CPU Nanodes work even when GPU plans are account-gated).
 
+### Measured run (v1)
+
+Artifact: `artifacts/distributed_multi_machine_proof.json`
+
+| Field | Value |
+|---|---|
+| hosts | `172.104.210.172`, `66.175.215.40` (distinct Nanodes) |
+| linode_ids | 110961884, 110961887 |
+| n_items | 5000 |
+| wall_seconds | 1.026 |
+| actual_cost_usd | 2.14e-06 |
+| correct | true |
+| success | true |
+| multi_machine | true |
+| destroyed | true (API list: 0 matching `tron-dist-*` / tag `tron-dist-proof`) |
+
 ## Honesty
 
 - Same-host two-process e2e is **coordination proof**, not multi-machine proof.
