@@ -17,3 +17,8 @@ tron_*.db
 .tron_efficiency_results/
 tron_autopilot_decisions.jsonl
 tron_costtrace_log.jsonl
+
+tron_autopilot_history.json
+tron_provider_stats.jsonl
+tron_providers.json
+tron_usage.jsonl
