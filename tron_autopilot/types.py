@@ -45,6 +45,9 @@ class WorkloadSpec:
     # When True, pooled candidates require workers that advertised
     # efficiency_runtime (torch/transformers/accelerate).
     requires_efficiency_runtime: bool = False
+    # Soft geographic preference forwarded to /submit → matcher.
+    preferred_region: str | None = None
+    preferred_location_strict: bool = False
     # Distributed Execution Engine v1 — independent task parallelism.
     # When parallelizable=True and partition_items is a non-empty list,
     # Autopilot may choose target="distributed" if the cost model says

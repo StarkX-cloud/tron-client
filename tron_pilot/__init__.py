@@ -8,6 +8,7 @@ regulated payment rails — only usage accounting hooks.
 from tron_pilot.client import TronClient
 from tron_pilot.provider import ProviderRecord, ProviderRegistry
 from tron_pilot.provider_stats import ProviderStatsStore
+from tron_pilot.sla import sla_report
 from tron_pilot.usage import UsageEvent, UsageLedger, usage_report
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "UsageEvent",
     "UsageLedger",
     "usage_report",
+    "sla_report",
 ]

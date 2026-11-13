@@ -184,6 +184,14 @@ TRAINING_AUTH_TOKEN = os.environ.get("TRON_TRAINING_AUTH_TOKEN") or None
 # (existing tests post to /submit without a header). When set, /submit
 # requires a matching X-TRON-AUTH header (same header name as training).
 SUBMIT_AUTH_TOKEN = os.environ.get("TRON_SUBMIT_AUTH_TOKEN") or None
+# When set, only workers whose names appear as verified in ProviderRegistry
+# are eligible for match (operator attestation — not hardware root-of-trust).
+REQUIRE_VERIFIED_PROVIDERS = (
+    os.environ.get("TRON_REQUIRE_VERIFIED_PROVIDERS", "").lower() in ("1", "true", "yes")
+)
+# Auto-quarantine workers below this success rate after enough samples.
+QUARANTINE_MIN_SUCCESS_RATE = float(os.environ.get("TRON_QUARANTINE_MIN_SUCCESS_RATE", "0.35"))
+QUARANTINE_MIN_SAMPLES = int(os.environ.get("TRON_QUARANTINE_MIN_SAMPLES", "5"))
 
 
 def _require_submit_auth(request: Request) -> None:
@@ -192,6 +200,82 @@ def _require_submit_auth(request: Request) -> None:
     supplied = request.headers.get("X-TRON-AUTH")
     if not supplied or not hmac.compare_digest(supplied, SUBMIT_AUTH_TOKEN):
         raise HTTPException(status_code=401, detail="missing or invalid X-TRON-AUTH token")
+
+
+def _require_worker_auth(request: Request, worker_name: str) -> None:
+    """Fail-closed: registered workers must present their auth_token."""
+    with lock:
+        worker = workers.get(worker_name)
+        if worker is None:
+            raise HTTPException(status_code=404, detail="worker not registered")
+        stored = worker.get("auth_token")
+        if not stored:
+            return
+        supplied = request.headers.get("X-TRON-AUTH")
+        if not supplied or not hmac.compare_digest(supplied, stored):
+            raise HTTPException(status_code=403, detail="invalid worker auth token")
+
+
+def _provider_qualities() -> dict:
+    """Best-effort worker_name → success_rate from ProviderStatsStore."""
+    try:
+        from tron_pilot.provider_stats import ProviderStatsStore
+
+        store = ProviderStatsStore()
+        rows = store.read_all()
+        by_worker: dict[str, list[bool]] = {}
+        for r in rows:
+            name = r.get("worker_name")
+            if not name:
+                continue
+            by_worker.setdefault(name, []).append(bool(r.get("success")))
+        return {
+            name: (sum(1 for s in vals if s) / len(vals))
+            for name, vals in by_worker.items()
+            if vals
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _verified_worker_names() -> set[str] | None:
+    if not REQUIRE_VERIFIED_PROVIDERS:
+        return None
+    try:
+        from tron_pilot.provider import ProviderRegistry
+
+        names = set()
+        for row in ProviderRegistry().list_providers(verified_only=True):
+            if row.get("worker_name"):
+                names.add(row["worker_name"])
+        return names
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _maybe_quarantine(worker_name: str) -> None:
+    """Soft quarantine unreliable providers from measured job-pool outcomes."""
+    try:
+        from tron_pilot.provider_stats import ProviderStatsStore
+
+        summary = ProviderStatsStore().summary(worker_name=worker_name)
+        if summary.get("n", 0) < QUARANTINE_MIN_SAMPLES:
+            return
+        rate = summary.get("success_rate")
+        if rate is None:
+            return
+        with lock:
+            w = workers.get(worker_name)
+            if not w:
+                return
+            if rate < QUARANTINE_MIN_SUCCESS_RATE:
+                w["quarantined"] = True
+                w["quarantine_reason"] = (
+                    f"success_rate={rate:.2f} over {summary['n']} samples "
+                    f"< {QUARANTINE_MIN_SUCCESS_RATE}"
+                )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _require_training_auth(request: Request) -> None:
@@ -356,6 +440,15 @@ def register_worker(worker: dict):
             # Optional economics signals (Autopilot fleet pricing).
             "sku": worker.get("sku") or caps.get("sku"),
             "hourly_rate_usd": worker.get("hourly_rate_usd", caps.get("hourly_rate_usd")),
+            "max_concurrent_jobs": int(
+                worker.get("max_concurrent_jobs")
+                or caps.get("max_concurrent_jobs")
+                or 1
+            ),
+            "cpu_count": worker.get("cpu_count") or caps.get("cpu_count"),
+            "active_jobs": 0,
+            "quarantined": bool(worker.get("quarantined", False)),
+            "quarantine_reason": worker.get("quarantine_reason"),
             "capabilities": caps,
             "load": 0,
             "status": "idle",
@@ -524,6 +617,15 @@ def submit(job: dict, request: Request):
         # pre-existing placement decision is unaffected until a caller
         # actually sets this.
         "required_memory_gb": float(job.get("required_memory_gb", 0) or 0),
+        # Hard filter: only workers advertising efficiency_runtime.
+        "requires_efficiency_runtime": bool(job.get("requires_efficiency_runtime", False)),
+        # Soft (or strict) geographic preference — see matcher.score_pair.
+        "preferred_location": job.get("preferred_location") or job.get("preferred_region"),
+        "preferred_location_strict": bool(job.get("preferred_location_strict", False)),
+        # Soft tenancy tags for usage/SLA reports (not a sandbox).
+        "customer_id": job.get("customer_id"),
+        "tenant_id": job.get("tenant_id"),
+        "project_id": job.get("project_id"),
         # How many times _watchdog_loop has already requeued this job
         # after a dead worker was holding it. Without this a job whose
         # every assigned worker dies in turn would requeue forever,
@@ -553,6 +655,9 @@ def submit(job: dict, request: Request):
             "status": "queued",
             "submitted_at": time.time(),
             "fn_hash": fn_artifact.artifact_id,
+            "customer_id": enriched_job.get("customer_id"),
+            "tenant_id": enriched_job.get("tenant_id"),
+            "project_id": enriched_job.get("project_id"),
         }
 
     emit(job_id, "queued", {"fn_hash": fn_artifact.artifact_id, "input_hashes": []})
@@ -966,8 +1071,10 @@ def _claim_job(worker_name: str, job: dict) -> str:
     specific worker — caller must already hold `lock`. Returns job_id."""
     job_id = job["id"]
     job_store[job_id]["status"] = "running"
+    job_store[job_id]["worker"] = worker_name
     workers[worker_name]["status"] = "busy"
     workers[worker_name]["load"] += job.get("memory_gb", 1)
+    workers[worker_name]["active_jobs"] = int(workers[worker_name].get("active_jobs") or 0) + 1
     running_jobs[job_id] = {
         "worker": worker_name,
         "start_time": time.time(),
@@ -980,7 +1087,8 @@ def _claim_job(worker_name: str, job: dict) -> str:
 
 
 @app.get("/next_job/{worker_name}")
-def next_job(worker_name: str):
+def next_job(worker_name: str, request: Request):
+    _require_worker_auth(request, worker_name)
 
     claimed_job = None
     scale_state = None
@@ -990,6 +1098,8 @@ def next_job(worker_name: str):
 
         if worker_name not in workers:
             return {"job": None}
+        if workers[worker_name].get("quarantined"):
+            return {"job": None, "error": "worker quarantined"}
 
         # Phase 2b: if the periodic match step (tron/spine/matcher.py)
         # already decided this worker should get a specific job — having
@@ -1070,23 +1180,35 @@ def next_job(worker_name: str):
 # =========================
 
 @app.post("/complete/{job_id}")
-def complete(job_id: str, result: dict):
-
+def complete(job_id: str, result: dict, request: Request):
     runtime = 0
     worker_name = None
+    customer_id = None
+    requeue_count = 0
 
     if isinstance(result, dict) and "result" in result and len(result) == 1:
         # Workers currently wrap payloads as {"result": actual_result}
         result = result["result"]
 
     with lock:
-
         if job_id not in job_store:
             return {"ok": False}
 
         if job_id in running_jobs:
             runtime = time.time() - running_jobs[job_id]["start_time"]
             worker_name = running_jobs[job_id]["worker"]
+            job_meta = running_jobs[job_id].get("job") or {}
+            customer_id = job_meta.get("customer_id")
+            requeue_count = float(job_meta.get("requeue_count") or 0)
+
+        # Only the assigned worker (or a still-registered one matching the
+        # stored worker) may complete. Fail closed when we know the worker.
+        if worker_name:
+            stored = (workers.get(worker_name) or {}).get("auth_token")
+            if stored:
+                supplied = request.headers.get("X-TRON-AUTH")
+                if not supplied or not hmac.compare_digest(supplied, stored):
+                    raise HTTPException(status_code=403, detail="invalid worker auth token")
 
         result_bytes = json.dumps(result, default=str).encode("utf-8")
         output_artifact = artifact_store.put(result_bytes)
@@ -1096,16 +1218,21 @@ def complete(job_id: str, result: dict):
             "result": result,
             "runtime": runtime,
             "output_hash": output_artifact.artifact_id,
+            "worker": worker_name,
         })
 
-        if worker_name:
+        if worker_name and worker_name in workers:
             workers[worker_name]["status"] = "idle"
             workers[worker_name]["load"] = max(
                 0,
                 workers[worker_name]["load"]
                 - running_jobs[job_id]["job"]["memory_gb"]
             )
-
+            workers[worker_name]["active_jobs"] = max(
+                0, int(workers[worker_name].get("active_jobs") or 1) - 1
+            )
+            del running_jobs[job_id]
+        elif job_id in running_jobs:
             del running_jobs[job_id]
 
     # NB: deliberately no load_shaper.release() here — the window is a
@@ -1115,18 +1242,60 @@ def complete(job_id: str, result: dict):
     emit(job_id, "completed", {
         "runtime": runtime,
         "output_hash": output_artifact.artifact_id,
+        "worker": worker_name,
     })
 
-    return {"ok": True}
+    if worker_name:
+        try:
+            from tron_pilot.provider_stats import ProviderOutcome, ProviderStatsStore
+
+            ProviderStatsStore().record(
+                ProviderOutcome(
+                    worker_name=worker_name,
+                    provider_id=None,
+                    success=True,
+                    runtime_seconds=float(runtime or 0),
+                    requeue_count=requeue_count,
+                    target="pooled",
+                    customer_id=customer_id,
+                )
+            )
+            _maybe_quarantine(worker_name)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return {"ok": True, "worker": worker_name}
 
 
 @app.post("/complete_job")
-def complete_job(payload: dict):
+def complete_job(payload: dict, request: Request):
     job_id = payload.get("job_id")
     result = payload.get("result", {})
     if not job_id:
         return {"ok": False, "error": "missing job_id"}
-    return complete(job_id, result)
+    return complete(job_id, result, request)
+
+
+@app.post("/workers/{worker_name}/quarantine")
+def quarantine_worker(worker_name: str, payload: dict = None):
+    """Operator soft-quarantine — worker stays registered but ineligible."""
+    reason = (payload or {}).get("reason") or "operator"
+    with lock:
+        if worker_name not in workers:
+            raise HTTPException(status_code=404, detail="worker not registered")
+        workers[worker_name]["quarantined"] = True
+        workers[worker_name]["quarantine_reason"] = reason
+    return {"ok": True, "worker_name": worker_name, "quarantined": True}
+
+
+@app.post("/workers/{worker_name}/clear_quarantine")
+def clear_quarantine(worker_name: str):
+    with lock:
+        if worker_name not in workers:
+            raise HTTPException(status_code=404, detail="worker not registered")
+        workers[worker_name]["quarantined"] = False
+        workers[worker_name]["quarantine_reason"] = None
+    return {"ok": True, "worker_name": worker_name, "quarantined": False}
 
 # =========================
 # MATCH LOOP (Phase 2b): periodic global assignment
@@ -1155,16 +1324,25 @@ def _run_match_cycle():
         if not job_queue:
             return
         now = time.time()
+        verified = _verified_worker_names()
         idle_workers = {
             name: w for name, w in workers.items()
             if w.get("status") == "idle"
+            and not w.get("quarantined")
             and name not in pending_assignment
             and (now - w.get("last_heartbeat", 0)) <= HEARTBEAT_TIMEOUT_SECONDS
+            and (verified is None or name in verified)
         }
         if not idle_workers:
             return
 
-        assignments = match_jobs_to_workers(list(job_queue), idle_workers, topology, outcome_log=training_outcomes)
+        assignments = match_jobs_to_workers(
+            list(job_queue),
+            idle_workers,
+            topology,
+            outcome_log=training_outcomes,
+            provider_qualities=_provider_qualities(),
+        )
         for job_id, worker_name in assignments:
             index = next((i for i, j in enumerate(job_queue) if j["id"] == job_id), None)
             if index is None:
@@ -1234,6 +1412,7 @@ def _watchdog_loop():
             with lock:
                 if worker_name in workers:
                     workers[worker_name]["status"] = "offline"
+                    workers[worker_name]["active_jobs"] = 0
 
             orphaned = event_log.recover_orphaned_tasks(worker_name)
             for task in orphaned:
@@ -1246,6 +1425,7 @@ def _watchdog_loop():
                     if gave_up:
                         if job_id in job_store:
                             job_store[job_id]["status"] = "completed"
+                            job_store[job_id]["worker"] = worker_name
                             job_store[job_id]["result"] = {
                                 "status": "error",
                                 "error": (
@@ -1253,6 +1433,26 @@ def _watchdog_loop():
                                     f"every worker assigned this job died before completing it"
                                 ),
                             }
+                        try:
+                            from tron_pilot.provider_stats import (
+                                ProviderOutcome,
+                                ProviderStatsStore,
+                            )
+
+                            ProviderStatsStore().record(
+                                ProviderOutcome(
+                                    worker_name=worker_name,
+                                    provider_id=None,
+                                    success=False,
+                                    runtime_seconds=0.0,
+                                    requeue_count=float(requeue_count or 0),
+                                    target="pooled",
+                                    error="requeue_exhausted",
+                                )
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                        _maybe_quarantine(worker_name)
                     else:
                         if job_id in job_store:
                             job_store[job_id]["status"] = "queued"
@@ -1309,12 +1509,14 @@ async def stream(job_id: str):
 # =========================
 
 @app.get("/status/{job_id}")
-def status(job_id: str):
+def status(job_id: str, request: Request):
+    _require_submit_auth(request)
     return job_store.get(job_id, {"status": "not_found"})
 
 
 @app.get("/result/{job_id}")
-def result(job_id: str):
+def result(job_id: str, request: Request):
+    _require_submit_auth(request)
     return job_store.get(job_id, {"status": "not_found"})
 
 # =========================

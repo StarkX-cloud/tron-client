@@ -39,6 +39,12 @@ def submit_to_pool(
     priority: int = 1,
     timeout_seconds: float = 10.0,
     required_memory_gb: float | None = None,
+    requires_efficiency_runtime: bool = False,
+    preferred_location: str | None = None,
+    preferred_location_strict: bool = False,
+    customer_id: str | None = None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
 ) -> MagicFuture:
     """Hand a 'pooled' PlacementDecision off to the real job queue.
 
@@ -80,9 +86,19 @@ def submit_to_pool(
         "gpu_required": gpu_required,
         "min_memory_gb": min_memory_gb,
         "priority": priority,
+        "requires_efficiency_runtime": requires_efficiency_runtime,
     }
     if required_memory_gb is not None:
         submit_payload["required_memory_gb"] = required_memory_gb
+    if preferred_location:
+        submit_payload["preferred_location"] = preferred_location
+        submit_payload["preferred_location_strict"] = preferred_location_strict
+    if customer_id:
+        submit_payload["customer_id"] = customer_id
+    if tenant_id:
+        submit_payload["tenant_id"] = tenant_id
+    if project_id:
+        submit_payload["project_id"] = project_id
 
     headers = {}
     submit_token = os.environ.get("TRON_SUBMIT_AUTH_TOKEN") or None
@@ -110,7 +126,11 @@ def submit_to_pool(
 
     def status_fn(jid: str) -> dict:
         try:
-            resp = requests.get(f"{url}/status/{jid}", timeout=5)
+            resp = requests.get(
+                f"{url}/status/{jid}",
+                headers=headers or None,
+                timeout=5,
+            )
             return resp.json()
         except Exception as exc:  # noqa: BLE001 - surfaced through MagicFuture.status()
             return {"status": "error", "error": str(exc)}

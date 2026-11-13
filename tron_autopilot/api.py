@@ -45,6 +45,8 @@ class PlanRequest(BaseModel):
     prompt: str = "The quick brown fox jumps over the lazy dog, and"
     max_new_tokens: int = 32
     requires_efficiency_runtime: bool = False
+    preferred_region: str | None = None
+    preferred_location_strict: bool = False
     strategy: str = "autopilot"
     # Distributed Execution Engine v1
     parallelizable: bool = False
@@ -60,7 +62,12 @@ class RunRequest(PlanRequest):
     wait_timeout_seconds: float = 600.0
 
 
-def _spec_from(req: PlanRequest) -> WorkloadSpec:
+def _spec_from(req: PlanRequest, *, efficiency: bool | None = None) -> WorkloadSpec:
+    # When efficiency=True (HTTP /run default), require efficiency_runtime
+    # workers unless the caller explicitly cleared the flag.
+    needs_eff = req.requires_efficiency_runtime
+    if efficiency is True and not needs_eff:
+        needs_eff = True
     return WorkloadSpec(
         model_name=req.model_name,
         hourly_rate_usd=req.hourly_rate_usd,
@@ -74,7 +81,9 @@ def _spec_from(req: PlanRequest) -> WorkloadSpec:
         costtrace_task=req.costtrace_task,
         prompt=req.prompt,
         max_new_tokens=req.max_new_tokens,
-        requires_efficiency_runtime=req.requires_efficiency_runtime,
+        requires_efficiency_runtime=needs_eff,
+        preferred_region=req.preferred_region,
+        preferred_location_strict=req.preferred_location_strict,
         parallelizable=req.parallelizable,
         partition_items=req.partition_items,
         map_op=req.map_op,
@@ -122,7 +131,7 @@ def run(
 ):
     _require_api_auth(x_tron_auth)
     ap = EconomicAutopilot()
-    spec = _spec_from(req)
+    spec = _spec_from(req, efficiency=req.efficiency)
     plan_obj = ap.plan(spec, strategy=req.strategy)
     outcome = execute_plan(
         plan_obj,
@@ -185,6 +194,28 @@ def usage(
 
     return usage_report(
         UsageLedger(), customer_id=customer_id, since=since, until=until
+    )
+
+
+@app.get("/usage/sla")
+def usage_sla(
+    customer_id: str | None = None,
+    deadline_seconds: float | None = None,
+    since: float | None = None,
+    until: float | None = None,
+    x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH"),
+):
+    """Service-level measurement (p50/p95, availability) — not credits."""
+    _require_api_auth(x_tron_auth)
+    from tron_pilot.sla import sla_report
+    from tron_pilot.usage import UsageLedger
+
+    return sla_report(
+        UsageLedger(),
+        customer_id=customer_id,
+        deadline_seconds=deadline_seconds,
+        since=since,
+        until=until,
     )
 
 

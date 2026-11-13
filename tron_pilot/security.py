@@ -33,9 +33,11 @@ def current_trust_model() -> TrustModel:
         sandbox="process_timeout_and_rlimit_only",
         notes=(
             "Worker auth_token required for heartbeat/claim/complete",
-            "Provider verified flag is operator attestation",
-            "No container/seccomp multi-tenant isolation in v1",
-            "No payment rails or custody — usage hooks only",
+            "Submit token (when set) also gates /status and /result",
+            "Provider verified flag is operator attestation; TRON_REQUIRE_VERIFIED_PROVIDERS optional",
+            "Job child: env scrub + RLIMIT — not container/seccomp isolation",
+            "Unreliable workers may be soft-quarantined from measured stats",
+            "No payment rails or custody — usage/SLA hooks only",
         ),
     )
 
@@ -45,6 +47,16 @@ def auth_headers(
     autopilot: bool = False,
     submit: bool = False,
 ) -> dict[str, str]:
+    """Return auth headers for **one** surface at a time.
+
+    Autopilot and submit share the header name ``X-TRON-AUTH`` but use
+    different secrets — never pass both flags True (submit would overwrite).
+    """
+    if autopilot and submit:
+        raise ValueError(
+            "auth_headers: pass autopilot=True OR submit=True, not both "
+            "(same header name, different secrets)"
+        )
     headers: dict[str, str] = {}
     if autopilot:
         tok = os.environ.get("TRON_AUTOPILOT_API_TOKEN")

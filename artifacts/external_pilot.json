@@ -3,7 +3,7 @@
   "success": true,
   "customer_id": "pilot-dev-1",
   "provider": {
-    "provider_id": "prov_e95a40111df8",
+    "provider_id": "prov_d40216c626a0",
     "worker_name": "pilot-w0",
     "contact": "pilot@example.com",
     "region": "local-lab",
@@ -13,11 +13,11 @@
     "efficiency_runtime": false,
     "cuda_advertised": false,
     "verified": true,
-    "verified_at": 1794600285.5816646,
+    "verified_at": 1794601061.4654894,
     "verified_by": "pilot-harness",
-    "registered_at": 1794600285.5812552,
-    "last_seen_at": 1794600285.583945,
-    "master_url": "http://127.0.0.1:41223",
+    "registered_at": 1794601061.4651537,
+    "last_seen_at": 1794601061.4683948,
+    "master_url": "http://127.0.0.1:35355",
     "metadata": {}
   },
   "provider_verified": true,
@@ -29,25 +29,29 @@
     "providers_total": 1
   },
   "fleet": {
-    "master_url": "http://127.0.0.1:41223",
+    "master_url": "http://127.0.0.1:35355",
     "reachable": true,
     "error": null,
     "alive_count": 1,
     "efficiency_worker_count": 1,
     "gpu_worker_count": 0,
     "total_memory_gb": 16.780623872,
-    "total_free_memory_gb": 4.071018496,
+    "total_free_memory_gb": 4.074819584,
     "workers": [
       {
         "name": "pilot-w0",
         "memory_gb": 16.780623872,
-        "free_memory_gb": 4.071018496,
+        "free_memory_gb": 4.074819584,
         "gpu": false,
         "efficiency_runtime": true,
-        "latency_ms": 2.4214731888771057,
+        "latency_ms": 2.2179015214443205,
         "bandwidth_mbps": null,
         "sku": "g6-nanode-1",
-        "hourly_rate_usd": 0.0075
+        "hourly_rate_usd": 0.0075,
+        "location": "self-hosted",
+        "max_concurrent_jobs": 1,
+        "cpu_count": 4,
+        "quarantined": false
       }
     ],
     "min_hourly_rate_usd": 0.0075,
@@ -76,15 +80,15 @@
   "run_outcome": {
     "success": true,
     "target": "distributed",
-    "actual_runtime_seconds": 0.5202713639991998,
-    "actual_cost_usd": 1.0838986749983331e-06,
+    "actual_runtime_seconds": 0.5122022150026169,
+    "actual_cost_usd": 1.0670879479221185e-06,
     "metrics": {
       "distributed": true,
       "n_shards": 2,
       "attempts_total": 2,
       "duplicates_suppressed": 0,
-      "comm_predicted_seconds": 0.007679815415972993,
-      "actual_comm_seconds": 0.007679815415972993,
+      "comm_predicted_seconds": 0.007266897391411988,
+      "actual_comm_seconds": 0.007266897391411988,
       "comm_seconds_basis": "predicted_cost_model",
       "expected_total": 20540,
       "got_total": 20540
@@ -98,8 +102,8 @@
     "events": 2,
     "successes": 2,
     "failures": 0,
-    "total_cost_usd_estimate": 1.0838986749983331e-06,
-    "total_runtime_seconds": 0.5257256658333063,
+    "total_cost_usd_estimate": 1.0670879479221185e-06,
+    "total_runtime_seconds": 0.5170082567201462,
     "note": "cost_usd is hourly_rate \u00d7 wall time \u2014 an estimate for external billing systems, not a TRON-issued invoice or custody transfer"
   },
   "usage_events": 2,

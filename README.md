@@ -412,6 +412,22 @@ benchmark notes, limitations, and the next milestone:
 This is **not** a GPU marketplace and does not provision `dedicated`
 infrastructure or claim distributed VRAM.
 
+## External pilot / SDK (`tron_pilot/`)
+
+Production surface for independent developers and compute providers:
+
+```python
+from tron_pilot import TronClient
+client = TronClient(customer_id="acme")
+client.register_provider(worker_name="box-1", master_url="http://127.0.0.1:9000",
+                         register_with_master=False)
+client.run(model_name="acme/job", hourly_rate_usd=0.5, efficiency=False)
+print(client.usage_report())
+```
+
+Reproducible harness: `PYTHONPATH=. python3 scripts/external_pilot_harness.py`  
+Docs: [docs/integration.md](docs/integration.md), [writeup/global-compute-pilot.md](writeup/global-compute-pilot.md).
+
 ## Routing layer (`tron_router/`)
 
 The first thing connecting single-node efficiency to the distributed

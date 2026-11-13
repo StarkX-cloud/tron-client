@@ -185,7 +185,11 @@ def remote(fn=None, local_first: bool = True, **default_resources):
             # Create status function for MagicFuture
             def status_fn(jid):
                 try:
-                    resp = requests.get(f"{queue_url}/status/{jid}", timeout=5)
+                    resp = requests.get(
+                        f"{queue_url}/status/{jid}",
+                        headers=_headers or None,
+                        timeout=5,
+                    )
                     return resp.json()
                 except Exception as e:
                     return {"status": "error", "error": str(e)}

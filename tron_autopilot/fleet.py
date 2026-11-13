@@ -24,6 +24,10 @@ class WorkerCapacity:
     bandwidth_mbps: float | None = None
     sku: str | None = None
     hourly_rate_usd: float | None = None
+    location: str | None = None
+    max_concurrent_jobs: int = 1
+    cpu_count: int | None = None
+    quarantined: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -175,6 +179,20 @@ def query_fleet_capacity(
                 bandwidth_mbps=(link or {}).get("bandwidth_mbps") if isinstance(link, dict) else None,
                 sku=str(sku) if sku else None,
                 hourly_rate_usd=rate_f,
+                location=w.get("location") or caps.get("location"),
+                max_concurrent_jobs=int(
+                    w.get("max_concurrent_jobs") or caps.get("max_concurrent_jobs") or 1
+                ),
+                cpu_count=(
+                    int(w["cpu_count"])
+                    if isinstance(w.get("cpu_count"), (int, float))
+                    else (
+                        int(caps["cpu_count"])
+                        if isinstance(caps.get("cpu_count"), (int, float))
+                        else None
+                    )
+                ),
+                quarantined=bool(w.get("quarantined", False)),
             )
         )
     return FleetCapacity(master_url=url, reachable=True, workers=out, error=None)

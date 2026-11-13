@@ -140,6 +140,9 @@ class TronClient:
             master_url=self.master_url,
             required_memory_gb=required_memory_gb,
             min_memory_gb=required_memory_gb or 1.0,
+            customer_id=self.tenant.customer_id,
+            tenant_id=self.tenant.tenant_id,
+            project_id=self.tenant.project_id,
         )
         if not wait:
             return future
@@ -191,6 +194,15 @@ class TronClient:
             "map_op": workload.get("map_op", "sum_squares"),
             "min_shard_size": int(workload.get("min_shard_size", 1)),
             "bytes_per_item": float(workload.get("bytes_per_item", 64.0)),
+            "requires_efficiency_runtime": bool(
+                workload.get(
+                    "requires_efficiency_runtime",
+                    workload.get("efficiency", False),
+                )
+            ),
+            "preferred_location_strict": bool(
+                workload.get("preferred_location_strict", False)
+            ),
         }
         optional = (
             "budget_usd",
@@ -200,6 +212,7 @@ class TronClient:
             "costtrace_task",
             "partition_items",
             "max_parallel_workers",
+            "preferred_region",
         )
         for k in optional:
             if k in workload and workload.get(k) is not None:

@@ -583,6 +583,11 @@ def _execute_pooled(
             func_kwargs=func_kwargs,
             master_url=spec.master_url,
             required_memory_gb=chosen.required_memory_gb,
+            requires_efficiency_runtime=bool(spec.requires_efficiency_runtime),
+            preferred_location=getattr(spec, "preferred_region", None),
+            preferred_location_strict=bool(
+                getattr(spec, "preferred_location_strict", False)
+            ),
         )
     except HandoffError as exc:
         elapsed = time.monotonic() - start

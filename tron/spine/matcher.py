@@ -138,6 +138,7 @@ def score_pair(
     master_node: str = "master",
     outcome_log=None,
     memory_aware: bool = True,
+    provider_quality: float | None = None,
 ) -> float:
     """Same scoring logic as GlobalDecisionBrain.decide, exposed standalone
     so the matcher can build a full cost matrix without going through the
@@ -147,9 +148,11 @@ def score_pair(
             - (latency_ms / 100) * compute_weight        # RTT cost, per Phase 2a
             - transfer_seconds * BANDWIDTH_PENALTY_WEIGHT # input-shipping cost, Phase 2c
             + (node_quality - 0.5) * OUTCOME_QUALITY_WEIGHT # track record, closing the outcomes loop
+            + region preference bonus (soft)
+            + provider_quality bonus (job-pool history)
 
-    unless `memory_fits` rules the pair out entirely, in which case this
-    returns INFEASIBLE_SCORE the same way a missing GPU does.
+    Hard infeasible when GPU / memory / efficiency_runtime / quarantine /
+    preferred_location_strict / verified-only gates fail.
 
     `outcome_log` is optional (a tron.orchestrator.outcomes.OutcomeLog) —
     omit it and this scores exactly as it did before outcome feedback
@@ -163,10 +166,28 @@ def score_pair(
     actually shipped before. Defaults to `True`: production code always
     gets the real check unless a caller deliberately asks not to.
     """
+    if worker.get("quarantined"):
+        return INFEASIBLE_SCORE
+
     if job.get("gpu") and not worker.get("gpu"):
         return INFEASIBLE_SCORE
 
+    if job.get("requires_efficiency_runtime") and not worker.get("efficiency_runtime"):
+        return INFEASIBLE_SCORE
+
+    preferred = job.get("preferred_location")
+    worker_loc = worker.get("location")
+    if preferred and job.get("preferred_location_strict"):
+        if not worker_loc or str(worker_loc) != str(preferred):
+            return INFEASIBLE_SCORE
+
     if memory_aware and not memory_fits(job, worker_name, worker, topology):
+        return INFEASIBLE_SCORE
+
+    # Concurrent slot capacity (default 1 = legacy busy/idle).
+    max_slots = int(worker.get("max_concurrent_jobs") or 1)
+    active = int(worker.get("active_jobs") or (1 if worker.get("status") == "busy" else 0))
+    if max_slots > 0 and active >= max_slots:
         return INFEASIBLE_SCORE
 
     priority = float(job.get("priority", 1))
@@ -175,7 +196,20 @@ def score_pair(
     penalty = 0.0 if latency_ms is None else (latency_ms / 100.0) * weight
     bandwidth_penalty = _transfer_penalty(job, worker_name, topology, master_node)
     quality_bonus = _outcome_quality_bonus(worker_name, outcome_log)
-    return priority - penalty - bandwidth_penalty + quality_bonus
+    region_bonus = 0.0
+    if preferred and worker_loc and str(worker_loc) == str(preferred):
+        region_bonus = 0.5  # soft preference — same scale as ~50ms unit-weight RTT
+    provider_bonus = 0.0
+    if provider_quality is not None:
+        provider_bonus = (float(provider_quality) - 0.5) * OUTCOME_QUALITY_WEIGHT
+    return (
+        priority
+        - penalty
+        - bandwidth_penalty
+        + quality_bonus
+        + region_bonus
+        + provider_bonus
+    )
 
 
 def match_jobs_to_workers(
@@ -185,6 +219,7 @@ def match_jobs_to_workers(
     master_node: str = "master",
     outcome_log=None,
     memory_aware: bool = True,
+    provider_qualities: dict[str, float] | None = None,
 ) -> list[tuple[str, str]]:
     """Return (job_id, worker_name) pairs forming the assignment that
     maximizes total score across all pairs simultaneously. Leftover jobs
@@ -195,6 +230,9 @@ def match_jobs_to_workers(
     `outcome_log` is optional — pass a tron.orchestrator.outcomes.OutcomeLog
     to let nodes' real training track records bias placement alongside the
     measured latency/bandwidth terms; omit it for topology-only scoring.
+
+    `provider_qualities` maps worker_name → success_rate (0..1) from the
+    job-pool provider stats store. Soft bonus only.
 
     `memory_aware=False` disables the `memory_fits` hard filter in every
     pair's score — see `score_pair`'s docstring. Only meant for
@@ -207,6 +245,7 @@ def match_jobs_to_workers(
     worker_names = list(idle_workers.keys())
     n_jobs = len(jobs)
     n_workers = len(worker_names)
+    qualities = provider_qualities or {}
 
     cost = np.zeros((n_jobs, n_workers))
     for i, job in enumerate(jobs):
@@ -214,6 +253,7 @@ def match_jobs_to_workers(
             score = score_pair(
                 job, worker_name, idle_workers[worker_name], topology, master_node,
                 outcome_log=outcome_log, memory_aware=memory_aware,
+                provider_quality=qualities.get(worker_name),
             )
             cost[i, j] = -score  # linear_sum_assignment minimizes; we want to maximize score
 

@@ -85,11 +85,14 @@ print(client.usage_report())
 
 ## Trust boundaries (honest)
 
-- Submit + Autopilot tokens optional but **recommended** in production
-- Worker tokens required for heartbeat / claim / complete
+- Submit + Autopilot tokens optional but **recommended** in production (also gates `/status` + `/result`)
+- Worker tokens **required** for heartbeat / claim (`/next_job`) / complete
+- `TRON_REQUIRE_VERIFIED_PROVIDERS=true` admits only operator-verified providers
+- Unreliable workers auto-quarantine from measured success rate (`TRON_QUARANTINE_*`)
 - Provider `verified` = operator attestation, not hardware root-of-trust
-- Sandbox = process timeout + RLIMIT only — **not** multi-tenant isolation
+- Job child: env scrub + RLIMIT_AS/CPU/NPROC/NOFILE — **not** a container sandbox
 - Cost = hourly rate × wall time (estimate for external billing systems)
+- SLA endpoint `GET /usage/sla` is measurement only (no credits)
 
 ## Commercial hooks (no custody)
 

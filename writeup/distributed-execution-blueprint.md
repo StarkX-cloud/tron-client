@@ -64,8 +64,8 @@ Client (curl / dashboard / SDK)
 
 * dedicated is infeasible in plan() unless a provisioner is configured;
   with TRON_DEDICATED_PROVISIONER=linode it provisions then re-routes pooled.
-** HTTP /run currently calls record_feedback(outcome) with wrong arity
-   (CLI passes plan+outcome). Costtrace still records; history update via API is broken.
+** ~~HTTP /run currently calls record_feedback(outcome) with wrong arity~~ **Fixed** — `record_feedback(plan, outcome)`
+   (CLI + HTTP both update RuntimeHistory). Costtrace still records when `costtrace_task` is set.
 ```
 
 ### Parallel training path (separate from Autopilot job pool)
@@ -101,7 +101,7 @@ Autopilot **does not** call `/training/session*`. Job pool and training wire are
 | SKU hourly table | **Implemented** (pinned snapshot, not live feed) | `tron_autopilot/pricing.py` |
 | Cost = rate × wall time | **Implemented** | `store.cost_from_runtime` |
 | Costtrace compute ledger | **Implemented** when `costtrace_task` set | `execute._record_costtrace` |
-| RuntimeHistory feedback | **Partial** | Works via CLI; HTTP `/run` calls `record_feedback(outcome)` but signature is `(plan, outcome)` |
+| RuntimeHistory feedback | **Yes** | CLI + HTTP `/run` both call `record_feedback(plan, outcome)` |
 | Dedicated cloud provision | **Partial / experimental** | Opt-in Linode provisioner; plan marks dedicated infeasible by default |
 | CUDA Autopilot (single machine) | **Implemented + proven** | Colab T4 artifact `artifacts/economic_autopilot_cuda_benchmark.json` |
 | Autopilot on multi-host CUDA pool | **Not proven** | ROADMAP unchecked; no artifact |
@@ -166,7 +166,7 @@ Autopilot **does not** call `/training/session*`. Job pool and training wire are
 | Memory | Every LoRA shard loads full base (~282 MB for pythia-70m); Autopilot CUDA pool unproven | writeups |
 | Scheduling | Matcher ignores `efficiency_runtime`; Autopilot under-uses measured latency for local-vs-pool | matcher + economic-autopilot |
 | Execution | Python minor-version cloudpickle incompatibility across heterogeneous fleet | compute-routing-layer |
-| Feedback | HTTP `/run` does not correctly call `record_feedback(plan, outcome)` | `api.py:120` vs `engine.py:518` |
+| Feedback | ~~HTTP `/run` arity bug~~ **Fixed** | `api.py` calls `record_feedback(plan, outcome)` |
 | Security | Auth stops strangers; authenticated poison shards / no secure aggregation | distributed-training writeup |
 
 ---
@@ -199,8 +199,8 @@ Autopilot **does not** call `/training/session*`. Job pool and training wire are
 **Goal:** `POST /run` or CLI `--real-model --live-pool` completes on a fleet where at least one **remote** worker has CUDA + `efficiency_runtime=true`; artifact shows `target=pooled`, peak GPU memory, cost.
 
 **In scope**
-1. Fix HTTP `record_feedback(plan, outcome)` arity (tiny correctness fix).
-2. Matcher (or pre-assign filter): refuse efficiency jobs on workers without `efficiency_runtime`.
+1. ~~Fix HTTP `record_feedback(plan, outcome)` arity~~ **Done**.
+2. ~~Matcher refuse efficiency jobs without `efficiency_runtime`~~ **Done** (`requires_efficiency_runtime` on `/submit` → `score_pair`).
 3. Harness: master + ≥1 GPU worker (Colab worker pointing at public master, or unlocked Linode GPU, or two processes with CUDA).
 4. Artifact: `artifacts/economic_autopilot_cuda_pool_benchmark.json`.
 5. Optional: weight pool vs local using `/topology` latency when history exists.
@@ -221,8 +221,8 @@ Autopilot **does not** call `/training/session*`. Job pool and training wire are
 
 | Step | Change | Touches | Risk |
 |---|---|---|---|
-| A1 | Fix `api.py` `record_feedback(plan, outcome)` + test | `tron_autopilot/api.py`, `tests/test_autopilot_api.py` | Low |
-| A2 | Capability-aware assign: skip workers with `efficiency_runtime=False` when job metadata requires it (or Autopilot sets a job flag) | `queue_server` match cycle and/or submit payload; tests | Medium — must not break non-efficiency jobs |
+| A1 | ~~Fix `api.py` `record_feedback(plan, outcome)`~~ **Done** | `tron_autopilot/api.py` | — |
+| A2 | ~~Capability-aware `requires_efficiency_runtime` matcher hard filter~~ **Done** | `matcher.py`, `queue_server` `/submit`, tests | — |
 | A3 | Benchmark harness `--real-model --live-pool` against remote GPU worker; write artifact | `benchmarks/economic_autopilot.py`, `scripts/` | Medium — needs GPU host |
 | A4 | Document results in `writeup/economic-autopilot.md`; update ROADMAP checkbox | writeups | Low |
 | A5 | Dashboard: show pooled plan/outcome when fleet has GPU workers | dashboard JS only | Low |
