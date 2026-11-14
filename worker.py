@@ -36,13 +36,79 @@ _MP_CONTEXT = multiprocessing.get_context("fork") if "fork" in multiprocessing.g
 _warned_no_subprocess_isolation = False
 
 
+_SENSITIVE_ENV_PREFIXES = (
+    "TRON_",
+    "LINODE_",
+    "AWS_",
+    "AZURE_",
+    "GCP_",
+    "GOOGLE_",
+    "OPENAI_",
+    "ANTHROPIC_",
+    "HF_",
+    "HUGGING",
+)
+_SENSITIVE_ENV_NAMES = {
+    "TRON_SUBMIT_AUTH_TOKEN",
+    "TRON_AUTOPILOT_API_TOKEN",
+    "TRON_TRAINING_AUTH_TOKEN",
+    "TRON_ARTIFACT_ENCRYPTION_KEY",
+    "LINODE_TOKEN",
+    "API_KEY",
+    "SECRET",
+    "PASSWORD",
+    "TOKEN",
+}
+
+
+_JOB_ENV_KEEP = {
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "PYTHONPATH",
+    "TRON_MASTER_URL",
+    "TRON_WORKER_NAME",
+    "TRON_LOCATION",
+    "TRON_WORKER_SKU",
+    "TRON_WORKER_HOURLY_RATE",
+    "TRON_JOB_TIMEOUT_SECONDS",
+    "TRON_JOB_MEMORY_LIMIT_MB",
+    "TRON_JOB_CPU_SECONDS",
+}
+
+
+def _scrub_job_environ() -> None:
+    """Drop secrets from the job child env. Not a sandbox — filesystem/network
+    still match the worker — but stops cloudpickle jobs from casually reading
+    provider tokens inherited via fork."""
+    for key in list(os.environ):
+        upper = key.upper()
+        if upper in _JOB_ENV_KEEP:
+            continue
+        if upper in _SENSITIVE_ENV_NAMES or any(
+            upper.startswith(p) for p in _SENSITIVE_ENV_PREFIXES
+        ):
+            os.environ.pop(key, None)
+            continue
+        if any(s in upper for s in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "AUTH")):
+            os.environ.pop(key, None)
+
+
 def _run_job_in_subprocess(func, args, kwargs, result_queue):
     try:
+        _scrub_job_environ()
         if JOB_MEMORY_LIMIT_MB > 0:
             try:
                 import resource
                 limit_bytes = JOB_MEMORY_LIMIT_MB * 1024 * 1024
                 resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+                # Soft CPU / process / fd caps — still not a container sandbox.
+                cpu_sec = int(float(os.environ.get("TRON_JOB_CPU_SECONDS", "300")))
+                if cpu_sec > 0:
+                    resource.setrlimit(resource.RLIMIT_CPU, (cpu_sec, cpu_sec))
+                resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+                resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
             except Exception:
                 pass  # not available on this platform (e.g. Windows) -- time limit below still applies
         result_queue.put(("ok", func(*args, **kwargs)))
@@ -174,19 +240,76 @@ def save_auth_token(token):
     AUTH_TOKEN_FILE.write_text(json.dumps({"auth_token": token, "worker_name": WORKER_NAME}))
 
 
+def _detect_efficiency_runtime() -> bool:
+    try:
+        import accelerate  # noqa: F401
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _reportable_memory_gb(gpu_available: bool, vram_gb) -> float:
+    """Prefer VRAM when a GPU is present; otherwise report system RAM.
+
+    Reporting 0 on CPU-only hosts made the matcher's memory_fits filter
+    reject every real-model job — a false "no capacity" signal.
+    """
+    if gpu_available and isinstance(vram_gb, (int, float)) and vram_gb > 0:
+        return float(vram_gb)
+    try:
+        import psutil
+
+        return float(psutil.virtual_memory().total) / 1_000_000_000.0
+    except Exception:
+        return float(vram_gb or 4)
+
+
 def register_worker():
     gpu_available, gpu_name, vram_gb, cuda_cores = detect_gpu()
+    memory_gb = _reportable_memory_gb(gpu_available, vram_gb)
+    efficiency_runtime = _detect_efficiency_runtime()
+    sku = os.environ.get("TRON_WORKER_SKU") or None
+    hourly_raw = os.environ.get("TRON_WORKER_HOURLY_RATE")
+    hourly_rate_usd = None
+    if hourly_raw:
+        try:
+            hourly_rate_usd = float(hourly_raw)
+        except ValueError:
+            hourly_rate_usd = None
+    if hourly_rate_usd is None and sku:
+        try:
+            from tron_autopilot.pricing import hourly_usd_for_sku
+
+            hourly_rate_usd = hourly_usd_for_sku(sku)
+        except Exception:  # noqa: BLE001
+            hourly_rate_usd = None
+    max_concurrent = int(os.environ.get("TRON_WORKER_MAX_CONCURRENT", "1"))
+    cpu_count = os.cpu_count() or 1
     payload = {
         "name": WORKER_NAME,
         "capabilities": {
             "gpu": gpu_available,
-            "memory_gb": vram_gb,
+            "memory_gb": memory_gb,
             "cuda_cores": cuda_cores,
             "location": LOCATION,
+            "efficiency_runtime": efficiency_runtime,
+            "sku": sku,
+            "hourly_rate_usd": hourly_rate_usd,
+            "max_concurrent_jobs": max_concurrent,
+            "cpu_count": cpu_count,
         },
+        "gpu": gpu_available,
         "gpu_name": gpu_name,
         "vram_gb": vram_gb,
+        "memory_gb": memory_gb,
+        "efficiency_runtime": efficiency_runtime,
+        "sku": sku,
+        "hourly_rate_usd": hourly_rate_usd,
         "cuda_cores": cuda_cores,
+        "max_concurrent_jobs": max_concurrent,
+        "cpu_count": cpu_count,
         "network_bandwidth_gbps": 1.0,
         "location": LOCATION,
         "metadata": {"bootstrap": "tron-node", "runtime": "python"},

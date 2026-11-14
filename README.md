@@ -373,6 +373,69 @@ package (not just the mechanism) end-to-end on a CUDA machine — CLI,
 benchmark engine, API, dashboard all pointed at a real GPU — to close the
 integration gap the standalone validation script doesn't cover.
 
+## Economic Autopilot (`tron_autopilot/`)
+
+Unified decision + execution layer that **connects** (does not rewrite)
+placement (`tron_router` + matcher), memory optimization
+(`tron_efficiency.advisor`), safety (watchdog / `required_memory_gb` /
+requeue cap), and cost measurement (configured hourly rate × measured
+wall time, with predicted-vs-actual feedback):
+
+```bash
+python3 -m tron_autopilot.cli plan --model EleutherAI/pythia-70m --hourly-rate 0.50
+python3 -m tron_autopilot.cli run  --model EleutherAI/pythia-70m --hourly-rate 0.50 --sleep 0.1
+python3 -m tron_autopilot.cli run  --model EleutherAI/pythia-70m --hourly-rate 0.50 --real-model
+python3 -m tron_autopilot.cli bench --trials 3 --out artifacts/economic_autopilot_benchmark.json
+python3 -m tron_autopilot.cli bench --trials 3 --live-pool
+python3 -m tron_autopilot.cli bench --real-model --trials 2 --max-new-tokens 8
+```
+
+`--real-model` executes the advisor-chosen `BaselinePolicy` /
+`OffloadPolicy` through `tron_efficiency` (needs
+`requirements-training.txt`). CUDA is used only when
+`detect_hardware()` reports a GPU — this path never fabricates VRAM wins.
+
+Workers advertise `efficiency_runtime` when they can import
+torch/transformers/accelerate; Autopilot will not pool real-model jobs
+onto workers that never claimed that. Fleet snapshot:
+`tron_autopilot.fleet.query_fleet_capacity`.
+
+A workload carries budget, deadline, and reliability. Autopilot builds
+feasible candidates (local / pooled / dedicated-flag), picks by strategy
+(`autopilot` = min expected cost among feasible; `fixed` = local baseline;
+`cheapest` = naive min-$ ignoring memory-fit hard blocks), executes via
+the existing local or `submit_to_pool` path, and logs why — plus measured
+feedback into `RuntimeHistory` for the next prediction. Architecture,
+benchmark notes, limitations, and the next milestone:
+[writeup/economic-autopilot.md](writeup/economic-autopilot.md).
+
+This is **not** a GPU marketplace and does not provision `dedicated`
+infrastructure or claim distributed VRAM.
+
+## Experience Engine (`tron_experience/`)
+
+Learns runtime/cost patterns from real Autopilot DecisionLog outcomes
+(fingerprints never include prompts/code). Opt-in soft predictions via
+`TRON_EXPERIENCE_ENABLED=true` — never bypasses budget/memory/reliability
+gates. Dashboard: `/experience/dashboard`. Proof:
+`python3 scripts/experience_engine_proof.py`.
+
+## External pilot / SDK (`tron_pilot/`)
+
+Production surface for independent developers and compute providers:
+
+```python
+from tron_pilot import TronClient
+client = TronClient(customer_id="acme")
+client.register_provider(worker_name="box-1", master_url="http://127.0.0.1:9000",
+                         register_with_master=False)
+client.run(model_name="acme/job", hourly_rate_usd=0.5, efficiency=False)
+print(client.usage_report())
+```
+
+Reproducible harness: `PYTHONPATH=. python3 scripts/external_pilot_harness.py`  
+Docs: [docs/integration.md](docs/integration.md), [writeup/global-compute-pilot.md](writeup/global-compute-pilot.md).
+
 ## Routing layer (`tron_router/`)
 
 The first thing connecting single-node efficiency to the distributed

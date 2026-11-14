@@ -5,6 +5,23 @@ real training and compute workloads across heterogeneous, unreliable nodes
 with near-zero communication overhead — with a live, causal 3D replay of
 what the cluster is doing.**
 
+## The company bet (intelligence flywheel)
+
+The durable advantage is not owning GPUs. It is **execution intelligence**
+accumulated across real workloads:
+
+1. **Acquire** computational workloads  
+2. **Accumulate** high-quality execution intelligence  
+3. **Convert** experience into better algorithms  
+4. **Improve** compute economics  
+5. **Attract** more workloads and infrastructure  
+6. **Compound** the intelligence advantage  
+
+The machines execute the work. The data teaches TRON how to execute it
+better. Product surface: `tron_experience/` (ledger, learner, governance)
+scored by `tron_experience.flywheel.score_flywheel` and shown on
+`/experience/flywheel` + `/experience/dashboard`.
+
 This is not a rental-compute marketplace. That was an earlier direction
 (billing, royalties, customer accounts) and it has been removed — see
 "What was cut" below.
@@ -259,3 +276,12 @@ None of this was wrong to have built — the billing layer, in particular, is
 a legitimate idea that just isn't the goal. It's removed so the repository
 reflects one thesis instead of two, and so a stranger cloning it sees the
 actual state of the system rather than four documents asserting it's done.
+
+## Economic Autopilot (integration layer)
+
+`tron_autopilot/` sits above the spine/router/efficiency/costtrace stack
+as a thin orchestration layer: one `WorkloadSpec` in, one explained
+`WorkloadPlan` out, then `execute_plan` using existing local policies or
+`tron_router.handoff.submit_to_pool`. It does not replace Phase 1–4
+mechanisms and does not restore the removed marketplace. See
+`writeup/economic-autopilot.md`.

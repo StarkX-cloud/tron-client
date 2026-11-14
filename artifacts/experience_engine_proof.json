@@ -1,0 +1,67 @@
+{
+  "success": true,
+  "train_report": {
+    "version_id": "exp_8af15d4d",
+    "train_n": 21,
+    "holdout_n": 9,
+    "mae": 0.0002083478024848794,
+    "baseline_mae": 2.8811882214921,
+    "beats_baseline": true,
+    "rmse": 0.00022316541005274737,
+    "failure_rate_train": 0.33333333333333337,
+    "features": [
+      "model_name",
+      "target",
+      "policy",
+      "device",
+      "dtype",
+      "batch_size",
+      "map_op",
+      "parallel_workers",
+      "reliability",
+      "requires_efficiency_runtime",
+      "worker_sku",
+      "gpu",
+      "region"
+    ],
+    "notes": "per-class mean with sku/target/global fallback; evaluated on chronological holdout of real DecisionLog outcomes",
+    "artifact_path": "/tmp/tron-exp-ksgsdxgx/artifacts/exp_8af15d4d.json"
+  },
+  "unseen_real_model_eval": {
+    "source": "/workspace/artifacts/autopilot_real_decisions.jsonl",
+    "n": 9,
+    "experience_mae": 0.6779494633332838,
+    "naive_global_mean_mae": 1.5917274235037335,
+    "beats_naive_on_unseen": true
+  },
+  "intelligence": {
+    "workloads_observed": 30,
+    "workload_categories_learned": 2,
+    "prediction_accuracy": {
+      "n_with_prediction": 30,
+      "runtime_mae_seconds": 2.0149698545946855,
+      "cost_mae_usd": 0.0001119595223909284
+    },
+    "model_improvements": [
+      {
+        "version_id": "exp_8af15d4d",
+        "mae": 0.0002083478024848794,
+        "baseline_mae": 2.8811882214921,
+        "improvement_pct": 99.99276868477628,
+        "status": "active",
+        "beats_baseline": true
+      }
+    ],
+    "honesty": [
+      "Metrics come from real DecisionLog / ExperienceLedger rows only",
+      "Unvalidated models cannot be promoted (beats_baseline required)",
+      "Experience predictions never bypass Autopilot hard constraints"
+    ]
+  },
+  "constraints": [
+    "Predictions are soft estimates only",
+    "Promotion requires beats_baseline",
+    "No prompts/code/model I/O in training features",
+    "Source rows: real Autopilot DecisionLog artifacts"
+  ]
+}

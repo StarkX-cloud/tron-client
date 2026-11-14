@@ -1,0 +1,161 @@
+{
+  "benchmark": "adaptive_compute_optimized_vs_unoptimized",
+  "model": "EleutherAI/pythia-70m",
+  "real_model": true,
+  "trials_per_mode": 2,
+  "hardware": {
+    "cuda_available": false,
+    "cpu_count": 4,
+    "cpu_total_memory_bytes": 16780623872,
+    "gpus": []
+  },
+  "modes": {
+    "unoptimized": {
+      "label": "unoptimized",
+      "total_runs": 2,
+      "successes": 2,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "successes_per_hour": 9062.11770174014,
+      "cost_per_successful_usd": 4.1741688541555456e-05,
+      "peak_gpu_memory_bytes": null,
+      "peak_cpu_memory_bytes": 1228834816.0,
+      "gpu_utilization_percent": null,
+      "throughput_tokens_per_second": 246.14895208182247,
+      "avg_completion_seconds": 0.30054015749919927,
+      "total_wall_seconds": 0.7945162750002055,
+      "communication_overhead_seconds": null,
+      "recovery_rate": null,
+      "notes": [
+        "peak GPU memory unavailable (CPU-only or not reported)",
+        "GPU utilization unavailable (no NVML/CUDA sampler)",
+        "communication overhead not measured for this path",
+        "independent GPUs are NOT claimed as one unified VRAM pool"
+      ],
+      "profiles": [
+        {
+          "mode": "unoptimized",
+          "policy_override": "baseline",
+          "dtype_override": "fp32",
+          "device_override": "cpu",
+          "batch_size": 1,
+          "enable_distributed": false,
+          "max_parallel_workers": null,
+          "memory_budget_bytes": null,
+          "rationale": [
+            "unoptimized baseline: baseline policy, fp32, batch_size=1, no distributed partitioning"
+          ],
+          "tradeoffs": [
+            "maximum simplicity; may OOM on tight memory or under-use GPU",
+            "no quantization \u2014 higher memory, often higher CPU quality"
+          ]
+        },
+        {
+          "mode": "unoptimized",
+          "policy_override": "baseline",
+          "dtype_override": "fp32",
+          "device_override": "cpu",
+          "batch_size": 1,
+          "enable_distributed": false,
+          "max_parallel_workers": null,
+          "memory_budget_bytes": null,
+          "rationale": [
+            "unoptimized baseline: baseline policy, fp32, batch_size=1, no distributed partitioning"
+          ],
+          "tradeoffs": [
+            "maximum simplicity; may OOM on tight memory or under-use GPU",
+            "no quantization \u2014 higher memory, often higher CPU quality"
+          ]
+        }
+      ]
+    },
+    "optimized": {
+      "label": "optimized",
+      "total_runs": 2,
+      "successes": 2,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "successes_per_hour": 8938.540783500825,
+      "cost_per_successful_usd": 3.96865430553185e-05,
+      "peak_gpu_memory_bytes": null,
+      "peak_cpu_memory_bytes": 1237184512.0,
+      "gpu_utilization_percent": null,
+      "throughput_tokens_per_second": 244.7778136732701,
+      "avg_completion_seconds": 0.2857431099982932,
+      "total_wall_seconds": 0.8055006040012813,
+      "communication_overhead_seconds": null,
+      "recovery_rate": null,
+      "notes": [
+        "peak GPU memory unavailable (CPU-only or not reported)",
+        "GPU utilization unavailable (no NVML/CUDA sampler)",
+        "communication overhead not measured for this path",
+        "independent GPUs are NOT claimed as one unified VRAM pool"
+      ],
+      "profiles": [
+        {
+          "mode": "optimized",
+          "policy_override": "baseline",
+          "dtype_override": "fp32",
+          "device_override": "cpu",
+          "batch_size": 1,
+          "enable_distributed": false,
+          "max_parallel_workers": null,
+          "memory_budget_bytes": null,
+          "rationale": [
+            "no CUDA \u2014 CPU execution (honest hetero fallback)",
+            "advisor recommends policy=baseline dtype=fp32 device=cpu",
+            "performance history best key: EleutherAI/pythia-70m|local|baseline|cpu|fp32|b1",
+            "adopting measured best policy/device/dtype/batch from history",
+            "single item \u2014 batch_size=1"
+          ],
+          "tradeoffs": []
+        },
+        {
+          "mode": "optimized",
+          "policy_override": "baseline",
+          "dtype_override": "fp32",
+          "device_override": "cpu",
+          "batch_size": 1,
+          "enable_distributed": false,
+          "max_parallel_workers": null,
+          "memory_budget_bytes": null,
+          "rationale": [
+            "no CUDA \u2014 CPU execution (honest hetero fallback)",
+            "advisor recommends policy=baseline dtype=fp32 device=cpu",
+            "performance history best key: EleutherAI/pythia-70m|local|baseline|cpu|fp32|b1",
+            "adopting measured best policy/device/dtype/batch from history",
+            "single item \u2014 batch_size=1"
+          ],
+          "tradeoffs": []
+        }
+      ]
+    }
+  },
+  "tradeoffs": {
+    "unoptimized": [
+      "maximum simplicity; may OOM on tight memory or under-use GPU",
+      "no quantization \u2014 higher memory, often higher CPU quality"
+    ],
+    "optimized": []
+  },
+  "delta": {
+    "completion_time_ratio_opt_over_unopt": 0.9507651568960614,
+    "cost_per_success_ratio_opt_over_unopt": 0.9507651568960613,
+    "successes_per_hour_ratio_opt_over_unopt": 0.9863633510061797,
+    "throughput_ratio_opt_over_unopt": 0.9944296394644142
+  },
+  "warmup": {
+    "success": true,
+    "runtime_seconds": 1.7464264879999973,
+    "error": null
+  },
+  "honesty": [
+    "Same workload and host for both modes.",
+    "Unoptimized = fixed baseline/fp32/batch=1.",
+    "Optimized = advisor + measured performance history + batch/device levers.",
+    "Real-model runs share a discarded warmup to avoid cold-cache bias.",
+    "Does not claim unified VRAM across independent GPUs.",
+    "GPU util / peak VRAM are None when CUDA/NVML unavailable."
+  ],
+  "performance_store_samples": 5
+}

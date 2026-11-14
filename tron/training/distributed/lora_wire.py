@@ -86,8 +86,14 @@ def run_lora_shard(
         poll_interval, max_wait_seconds,
     ))
 
-    torch.manual_seed(seed)
-    model = make_lora_model(base_model_factory(), seed=seed)
+    # Serialize factory + LoRA init: both touch the process-global RNG.
+    # Without this, concurrent shards interleave seeds and diverge from
+    # the single-process reference (tests/test_lora_over_wire.py).
+    from ..lora_demo import _LORA_INIT_LOCK
+
+    with _LORA_INIT_LOCK:
+        torch.manual_seed(seed)
+        model = make_lora_model(base_model_factory(), seed=seed)
     optimizer = None
 
     for round_idx in range(num_rounds):

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TRON — Experience Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #12180f;
+    --muted: #5c6a55;
+    --paper: #eef3e8;
+    --accent: #2f6b3a;
+    --accent-2: #1f4d6d;
+    --line: rgba(18, 24, 15, 0.12);
+    --ok: #1b7a45;
+    --bad: #9b2c2c;
+    --font-display: "Fraunces", Georgia, serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--ink);
+    font-family: var(--font-mono);
+    background:
+      radial-gradient(900px 480px at 0% 0%, rgba(47, 107, 58, 0.18), transparent 55%),
+      radial-gradient(800px 420px at 100% 10%, rgba(31, 77, 109, 0.14), transparent 50%),
+      linear-gradient(165deg, #d9e4d2 0%, var(--paper) 45%, #e4ebe0 100%);
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  .brand {
+    font-family: var(--font-display);
+    font-size: clamp(2.6rem, 7vw, 4.2rem);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 0.95;
+    margin: 0 0 0.75rem;
+  }
+  .lede {
+    max-width: 36rem;
+    color: var(--muted);
+    font-size: 0.95rem;
+    line-height: 1.55;
+    margin: 0 0 2rem;
+  }
+  .cta {
+    display: inline-flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-bottom: 2.5rem;
+  }
+  button {
+    font-family: var(--font-mono);
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: #f4f7f1;
+    padding: 0.65rem 1rem;
+    cursor: pointer;
+  }
+  button.ghost {
+    background: transparent;
+    color: var(--ink);
+  }
+  button:hover { opacity: 0.9; }
+  section {
+    padding: 1.5rem 0;
+    border-top: 1px solid var(--line);
+  }
+  section h2 {
+    font-family: var(--font-display);
+    font-size: 1.35rem;
+    margin: 0 0 0.35rem;
+  }
+  section p.sub {
+    margin: 0 0 1rem;
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1rem 1.5rem;
+  }
+  .metric strong {
+    display: block;
+    font-family: var(--font-display);
+    font-size: 1.8rem;
+    line-height: 1.1;
+  }
+  .metric span { color: var(--muted); font-size: 0.75rem; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.45rem 0.35rem;
+    border-bottom: 1px solid var(--line);
+  }
+  th { color: var(--muted); font-weight: 500; }
+  .ok { color: var(--ok); }
+  .bad { color: var(--bad); }
+  .auth {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+  input {
+    font-family: var(--font-mono);
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.55);
+    padding: 0.45rem 0.6rem;
+    min-width: 12rem;
+  }
+  .note { color: var(--muted); font-size: 0.75rem; margin-top: 1rem; }
+  #err { color: var(--bad); font-size: 0.85rem; min-height: 1.2em; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 class="brand">TRON</h1>
+    <p class="lede">
+      Experience Engine — workloads observed, classes learned, prediction
+      accuracy, and model improvements from real executions only.
+    </p>
+    <div class="cta">
+      <button id="refresh">Refresh intelligence</button>
+      <button class="ghost" id="train">Train from ledger</button>
+    </div>
+    <div class="auth">
+      <label for="token">X-TRON-AUTH</label>
+      <input id="token" type="password" placeholder="optional API token" />
+    </div>
+    <div id="err"></div>
+
+    <section>
+      <h2>Intelligence flywheel</h2>
+      <p class="sub">Acquire → accumulate → convert → economics → attract → compound.</p>
+      <p class="lede" id="thesis" style="margin-bottom:1rem;font-size:0.88rem;"></p>
+      <div id="flywheel"></div>
+      <p class="note">Health: <span id="health">—</span></p>
+    </section>
+
+    <section>
+      <h2>Observed intelligence</h2>
+      <p class="sub">One job: show what TRON has actually learned.</p>
+      <div class="metrics" id="metrics"></div>
+    </section>
+
+    <section>
+      <h2>Hardware profiles</h2>
+      <p class="sub">Counts of executions by coarse SKU / device class.</p>
+      <div id="hw"></div>
+    </section>
+
+    <section>
+      <h2>Model improvements</h2>
+      <p class="sub">Holdout MAE vs naive baseline — promote only when better.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Version</th>
+            <th>MAE</th>
+            <th>Baseline</th>
+            <th>Δ%</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="models"></tbody>
+      </table>
+      <p class="note" id="honesty"></p>
+    </section>
+  </div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  function headers() {
+    const t = $("token").value.trim();
+    return t ? { "X-TRON-AUTH": t } : {};
+  }
+  function fmt(n, d=3) {
+    if (n === null || n === undefined) return "—";
+    return Number(n).toFixed(d);
+  }
+  async function load() {
+    $("err").textContent = "";
+    try {
+      const [r, rf] = await Promise.all([
+        fetch("/experience/stats", { headers: headers() }),
+        fetch("/experience/flywheel", { headers: headers() }),
+      ]);
+      if (!r.ok) throw new Error(await r.text());
+      const d = await r.json();
+      if (rf.ok) {
+        const f = await rf.json();
+        $("thesis").textContent = f.thesis || "";
+        $("health").textContent = f.flywheel_health == null ? "—" : Number(f.flywheel_health).toFixed(2);
+        $("flywheel").innerHTML = (f.hierarchy || []).map((s, i) => `
+          <div style="padding:0.55rem 0;border-bottom:1px solid var(--line);">
+            <strong>${i+1}. ${s.title}</strong>
+            <span class="${s.status==='strong'?'ok':(s.status==='blocked'?'bad':'')}"> · ${s.status}</span>
+            <span style="color:var(--muted)"> · score ${s.score==null?'—':Number(s.score).toFixed(2)}</span>
+          </div>`).join("");
+      }
+      $("metrics").innerHTML = [
+        ["Workloads", d.workloads_observed],
+        ["Classes", d.workload_categories_learned],
+        ["Runtime MAE", fmt(d.prediction_accuracy?.runtime_mae_seconds)],
+        ["Feedback n", d.developer_feedback?.n ?? 0],
+      ].map(([l,v]) => `<div class="metric"><strong>${v}</strong><span>${l}</span></div>`).join("");
+      const hw = d.hardware_performance_profiles || {};
+      $("hw").innerHTML = Object.keys(hw).length
+        ? `<table><tbody>${Object.entries(hw).map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</tbody></table>`
+        : "<p class='sub'>No hardware profiles yet.</p>";
+      const rows = d.model_improvements || [];
+      $("models").innerHTML = rows.length
+        ? rows.map(m => `<tr>
+            <td>${m.version_id}</td>
+            <td>${fmt(m.mae)}</td>
+            <td>${fmt(m.baseline_mae)}</td>
+            <td class="${(m.improvement_pct||0)>0?'ok':'bad'}">${fmt(m.improvement_pct,1)}</td>
+            <td>${m.status}</td>
+          </tr>`).join("")
+        : `<tr><td colspan="5">No trained models yet — click Train.</td></tr>`;
+      $("honesty").textContent = (d.honesty || []).join(" · ");
+    } catch (e) {
+      $("err").textContent = String(e.message || e);
+    }
+  }
+  $("refresh").onclick = load;
+  $("train").onclick = async () => {
+    $("err").textContent = "";
+    try {
+      const r = await fetch("/experience/train?promote_if_better=true", {
+        method: "POST", headers: headers()
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const d = await r.json();
+      $("err").textContent = d.beats_baseline
+        ? `Trained ${d.version_id}: MAE ${fmt(d.mae)} < baseline ${fmt(d.baseline_mae)} (promoted if allowed)`
+        : `Trained ${d.version_id}: MAE ${fmt(d.mae)} did not beat baseline ${fmt(d.baseline_mae)}`;
+      await load();
+    } catch (e) {
+      $("err").textContent = String(e.message || e);
+    }
+  };
+  load();
+</script>
+</body>
+</html>

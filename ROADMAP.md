@@ -308,6 +308,63 @@ technical design behind each phase.
 
 ## Known follow-ups (not blocking, tracked here so they aren't lost)
 
+- [x] **Economic Autopilot (`tron_autopilot/`)** — unified plan/execute/
+  feedback over existing advisor + router + watchdog + cost accounting.
+  Strategies `fixed` / `cheapest` / `autopilot` share one executor;
+  decision JSONL + measured runtime history; e2e pooled execution and
+  dead-worker recovery evidence in `tests/test_autopilot_*.py`;
+  reproducible benchmark in `benchmarks/economic_autopilot.py`. Write-up:
+  `writeup/economic-autopilot.md`. Honest gaps left open: synthetic bench
+  body vs real LLM runner on CUDA; same-host pool ≠ WAN fleet; hourly
+  rates are user-configured.
+- [x] **Autopilot ↔ tron_efficiency bridge:** `efficiency_exec.py` runs
+  advisor-chosen Baseline/Offload via `run_workload`; `--real-model`
+  CLI/benchmark; measured tok/s + peak memory in outcome metrics +
+  history. CPU pythia-70m results preserved under
+  `artifacts/economic_autopilot_real_model_benchmark.json`. Local-only
+  for real models (pool not assumed to have torch).
+- [x] **Fleet efficiency_runtime + capacity snapshot:** workers report
+  RAM (not 0) on CPU hosts and advertise efficiency_runtime; Autopilot
+  `requires_efficiency_runtime` + `pooled_efficiency.run_efficiency_job`;
+  `tron_autopilot.fleet.query_fleet_capacity`.
+- [ ] **Next milestone:** Autopilot `--real-model` on a CUDA worker pool
+  (pythia-410m/1.4b) with peak VRAM metrics
+  (see `writeup/economic-autopilot.md`).
+- [x] **Distributed Execution Engine v1:** independent-task map across
+  pool workers (`tron_autopilot/distributed/`) — partition, communication
+  cost model (refuse when overhead wins), coordinator with idempotent
+  collect + per-shard retry, Autopilot candidate `target=distributed`.
+  Tests: `tests/test_distributed_*.py`. Multi-machine proof script:
+  `scripts/distributed_multi_machine_proof.py`. Write-up:
+  `writeup/distributed-execution-engine-v1.md`. Does **not** claim
+  tensor/pipeline parallel or distributed VRAM.
+- [x] **Adaptive Compute Intelligence (`tron_adaptive/`):** predicted →
+  actual → updated optimization decisions via `PerformanceStore` +
+  `AdaptiveOptimizer` (memory policy, dtype/quantization, batching,
+  CPU/GPU hetero, distributed when cost model agrees). Benchmark:
+  `benchmarks/adaptive_compute.py` optimized vs unoptimized with
+  successes/hour, cost/success, peak GPU mem, GPU util, throughput,
+  completion, comm overhead, failure/recovery. Artifacts under
+  `artifacts/adaptive_compute_*.json`. Write-up:
+  `writeup/adaptive-compute-intelligence.md`. No unified-VRAM claim.
+- [x] **Global Compute Network / production readiness (`tron_pilot/`):**
+  provider registry + verify challenge, provider stats, soft tenancy,
+  usage ledger/report hooks (no custody), `TronClient` SDK for
+  plan/run/fleet/submit, Autopilot `/trust` `/providers` `/usage`,
+  external pilot harness → `artifacts/external_pilot.json`. Docs:
+  `writeup/global-compute-pilot.md`, `docs/integration.md`.
+- [x] **Experience Engine (`tron_experience/`):** workload fingerprint +
+  intelligence ledger from real DecisionLog outcomes; learning pipeline
+  with holdout vs naive baseline; model versioning/rollback; soft
+  Autopilot prediction fill (`TRON_EXPERIENCE_ENABLED`); developer
+  feedback; governance (tenant isolation, retention, shared opt-in);
+  intelligence dashboard `/experience/dashboard`. Proof:
+  `artifacts/experience_engine_proof.json`. Write-up:
+  `writeup/experience-engine.md`. Never bypasses hard constraints.
+- [x] **Intelligence flywheel (company hierarchy):** acquire → accumulate
+  → convert → economics → attract → compound — measured in
+  `tron_experience/flywheel.py`, API `GET /experience/flywheel`, docs
+  `writeup/intelligence-flywheel.md` + ARCHITECTURE company bet.
 - [x] `tron/gpu/` OpenAI-compatible gateway now has `tron/gpu/README.md`
   documenting the `tron.gpu.*` layout (cluster / runtime / scheduler /
   openai_bridge), how to run the bridge (with the mocked-proxy test

@@ -70,6 +70,13 @@ class PoolStatus:
     # The whole dict is None (not {}) when /topology itself wasn't reachable
     # or didn't exist, distinct from "reachable but nothing measured yet".
     measured_links: dict | None = None
+    # Workers that advertised efficiency_runtime=True at registration
+    # (torch/transformers/accelerate importable). 0 means real-model
+    # Autopilot jobs cannot honestly be pooled.
+    efficiency_worker_count: int = 0
+    total_free_memory_gb: float | None = None
+    # Cheapest advertised worker hourly rate among alive workers (None if none).
+    min_hourly_rate_usd: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -80,6 +87,9 @@ class PoolStatus:
             "checked_worker_count": self.checked_worker_count,
             "error": self.error,
             "measured_links": self.measured_links,
+            "efficiency_worker_count": self.efficiency_worker_count,
+            "total_free_memory_gb": self.total_free_memory_gb,
+            "min_hourly_rate_usd": self.min_hourly_rate_usd,
         }
 
 
@@ -128,6 +138,24 @@ def query_pool_status(
     ]
     alive = [workers[name] for name in alive_names]
     total_memory_gb = sum(w.get("memory_gb", 0) or 0 for w in alive)
+    efficiency_worker_count = 0
+    free_vals = []
+    rate_vals = []
+    for w in alive:
+        caps = w.get("capabilities") if isinstance(w.get("capabilities"), dict) else {}
+        if w.get("efficiency_runtime", caps.get("efficiency_runtime", False)):
+            efficiency_worker_count += 1
+        free = w.get("free_memory_gb")
+        if isinstance(free, (int, float)):
+            free_vals.append(float(free))
+        rate = w.get("hourly_rate_usd", caps.get("hourly_rate_usd"))
+        try:
+            if rate is not None:
+                rate_vals.append(float(rate))
+        except (TypeError, ValueError):
+            pass
+    total_free_memory_gb = sum(free_vals) if free_vals else None
+    min_hourly_rate_usd = min(rate_vals) if rate_vals else None
 
     # Best-effort: /topology is a real endpoint on this same master, but
     # an older queue_server.py (or any other HTTP server answering the
@@ -151,6 +179,9 @@ def query_pool_status(
         total_reported_memory_gb=total_memory_gb,
         checked_worker_count=len(workers),
         measured_links=measured_links,
+        efficiency_worker_count=efficiency_worker_count,
+        total_free_memory_gb=total_free_memory_gb,
+        min_hourly_rate_usd=min_hourly_rate_usd,
     )
 
 

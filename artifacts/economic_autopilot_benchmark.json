@@ -1,0 +1,2305 @@
+{
+  "meta": {
+    "trials": 3,
+    "hourly_rate_usd": 0.5,
+    "pooled_hourly_rate_usd": 0.2,
+    "live_pool": false,
+    "master_url": null,
+    "model_name": "synthetic/autopilot-bench",
+    "notes": [
+      "Synthetic workload body \u2014 decision path uses real Autopilot/advisor/router interfaces with an injected size estimate.",
+      "Same-host live pool is not a multi-region fleet proof.",
+      "Cost = configured hourly rate \u00d7 measured wall time."
+    ]
+  },
+  "summaries": [
+    {
+      "strategy": "fixed",
+      "successes": 3,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "cost_per_successful_usd": 7.003297731471405e-06,
+      "avg_completion_seconds": 0.05042374366659411,
+      "avg_peak_memory_bytes": null,
+      "avg_requeue_count": 0.0,
+      "total_runs": 3
+    },
+    {
+      "strategy": "cheapest",
+      "successes": 3,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "cost_per_successful_usd": 6.971739259258642e-06,
+      "avg_completion_seconds": 0.050196522666662226,
+      "avg_peak_memory_bytes": null,
+      "avg_requeue_count": 0.0,
+      "total_runs": 3
+    },
+    {
+      "strategy": "autopilot",
+      "successes": 3,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "cost_per_successful_usd": 6.967550462964785e-06,
+      "avg_completion_seconds": 0.05016636333334645,
+      "avg_peak_memory_bytes": null,
+      "avg_requeue_count": 0.0,
+      "total_runs": 3
+    }
+  ],
+  "plans": {
+    "fixed": [
+      {
+        "plan_id": "plan_e9b45820d3c1",
+        "spec": {
+          "model_name": "synthetic/autopilot-bench",
+          "hourly_rate_usd": 0.5,
+          "budget_usd": 1.0,
+          "deadline_seconds": 30.0,
+          "reliability": "tolerant",
+          "pooled_hourly_rate_usd": 0.2,
+          "expected_runtime_seconds": 0.05,
+          "requires_multi_node": false,
+          "gpu_budget_bytes_override": null,
+          "master_url": null,
+          "costtrace_task": null
+        },
+        "chosen": {
+          "option_id": "local-baseline",
+          "target": "local",
+          "policy": "baseline",
+          "device": "cpu",
+          "dtype": "fp32",
+          "memory_budget_bytes": null,
+          "required_memory_gb": 4.0,
+          "hourly_rate_usd": 0.5,
+          "predicted_runtime_seconds": 0.0503361086363756,
+          "predicted_cost_usd": 6.991126199496612e-06,
+          "predicted_peak_memory_bytes": 4000000000,
+          "feasible": true,
+          "rejection_reasons": [],
+          "rationale": [
+            "advisor: cpu/fp32/baseline (confidence=medium)",
+            "runtime prediction source: measured_history_mean",
+            "fixed strategy: ignore advisor/pool; run local baseline"
+          ],
+          "source_signals": {
+            "advisor": {
+              "model_name": "synthetic/autopilot-bench",
+              "estimated_param_count": 1000000000,
+              "param_count_is_estimate": true,
+              "device": "cpu",
+              "dtype": "fp32",
+              "policy": "baseline",
+              "memory_budget_bytes": null,
+              "confidence": "medium",
+              "rationale": [
+                "no CUDA GPU detected -- recommending CPU execution",
+                "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+              ],
+              "warnings": []
+            },
+            "runtime_prediction_source": "measured_history_mean"
+          }
+        },
+        "candidates": [
+          {
+            "option_id": "local-baseline",
+            "target": "local",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.5,
+            "predicted_runtime_seconds": 0.0503361086363756,
+            "predicted_cost_usd": 6.991126199496612e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": true,
+            "rejection_reasons": [],
+            "rationale": [
+              "advisor: cpu/fp32/baseline (confidence=medium)",
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "advisor": {
+                "model_name": "synthetic/autopilot-bench",
+                "estimated_param_count": 1000000000,
+                "param_count_is_estimate": true,
+                "device": "cpu",
+                "dtype": "fp32",
+                "policy": "baseline",
+                "memory_budget_bytes": null,
+                "confidence": "medium",
+                "rationale": [
+                  "no CUDA GPU detected -- recommending CPU execution",
+                  "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+                ],
+                "warnings": []
+              },
+              "runtime_prediction_source": "measured_history_mean"
+            }
+          },
+          {
+            "option_id": "pooled-matcher",
+            "target": "pooled",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": 0.15769888980003635,
+            "predicted_cost_usd": 8.761049433335353e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": false,
+            "rejection_reasons": [
+              "pool unreachable: benchmark: no live pool (--live-pool not set)"
+            ],
+            "rationale": [
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "pool_status": {
+                "reachable": false,
+                "master_url": "http://127.0.0.1:9",
+                "alive_worker_count": 0,
+                "total_reported_memory_gb": 0.0,
+                "checked_worker_count": 0,
+                "error": "benchmark: no live pool (--live-pool not set)",
+                "measured_links": null
+              },
+              "runtime_prediction_source": "measured_history_mean",
+              "router_target": "dedicated"
+            }
+          },
+          {
+            "option_id": "dedicated-flag",
+            "target": "dedicated",
+            "policy": null,
+            "device": null,
+            "dtype": null,
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": null,
+            "predicted_cost_usd": null,
+            "predicted_peak_memory_bytes": null,
+            "feasible": false,
+            "rejection_reasons": [
+              "dedicated is a flag for real provisioned infrastructure \u2014 Autopilot does not call a cloud API or GPU marketplace"
+            ],
+            "rationale": [
+              "surfaced for honesty when local/pool cannot serve the job"
+            ],
+            "source_signals": {}
+          }
+        ],
+        "placement_decision": {
+          "target": "dedicated",
+          "confidence": "low",
+          "rationale": [
+            "decide_placement failed: ModuleNotFoundError: No module named 'transformers'"
+          ],
+          "warnings": [
+            "router placement unavailable \u2014 Autopilot continues with measured pool query"
+          ],
+          "local_recommendation": null,
+          "pool_status": null,
+          "required_memory_gb": null
+        },
+        "local_recommendation": {
+          "model_name": "synthetic/autopilot-bench",
+          "estimated_param_count": 1000000000,
+          "param_count_is_estimate": true,
+          "device": "cpu",
+          "dtype": "fp32",
+          "policy": "baseline",
+          "memory_budget_bytes": null,
+          "confidence": "medium",
+          "rationale": [
+            "no CUDA GPU detected -- recommending CPU execution",
+            "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+          ],
+          "warnings": []
+        },
+        "pool_status": {
+          "reachable": false,
+          "master_url": "http://127.0.0.1:9",
+          "alive_worker_count": 0,
+          "total_reported_memory_gb": 0.0,
+          "checked_worker_count": 0,
+          "error": "benchmark: no live pool (--live-pool not set)",
+          "measured_links": null
+        },
+        "safety": {
+          "pooled_failure_recovery": "watchdog_requeue",
+          "max_job_requeue_attempts": 3,
+          "memory_enforcement": "required_memory_gb \u2192 matcher.memory_fits",
+          "local_hardware_gate": "@tron.remote + detect_hardware (when using @remote)",
+          "checkpoint_recovery": "not supported for arbitrary callables",
+          "distributed_vram": "not claimed \u2014 not demonstrated",
+          "notes": [
+            "Pooled mid-job worker death is recovered by queue_server's watchdog via the spine event log (proven in tests/test_pool_reliability.py).",
+            "After max_job_requeue_attempts, the job fails with an explicit error result instead of requeuing forever.",
+            "Autopilot does not provision 'dedicated' infrastructure."
+          ]
+        },
+        "rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='fixed' chose local-baseline (target=local, predicted_cost_usd=6.991126199496612e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "fixed strategy: ignore advisor/pool; run local baseline"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "timestamp": 1794567731.424639
+      },
+      {
+        "plan_id": "plan_d2e28feaaa7e",
+        "spec": {
+          "model_name": "synthetic/autopilot-bench",
+          "hourly_rate_usd": 0.5,
+          "budget_usd": 1.0,
+          "deadline_seconds": 30.0,
+          "reliability": "tolerant",
+          "pooled_hourly_rate_usd": 0.2,
+          "expected_runtime_seconds": 0.05,
+          "requires_multi_node": false,
+          "gpu_budget_bytes_override": null,
+          "master_url": null,
+          "costtrace_task": null
+        },
+        "chosen": {
+          "option_id": "local-baseline",
+          "target": "local",
+          "policy": "baseline",
+          "device": "cpu",
+          "dtype": "fp32",
+          "memory_budget_bytes": null,
+          "required_memory_gb": 4.0,
+          "hourly_rate_usd": 0.5,
+          "predicted_runtime_seconds": 0.050350772434787514,
+          "predicted_cost_usd": 6.993162838164932e-06,
+          "predicted_peak_memory_bytes": 4000000000,
+          "feasible": true,
+          "rejection_reasons": [],
+          "rationale": [
+            "advisor: cpu/fp32/baseline (confidence=medium)",
+            "runtime prediction source: measured_history_mean",
+            "fixed strategy: ignore advisor/pool; run local baseline"
+          ],
+          "source_signals": {
+            "advisor": {
+              "model_name": "synthetic/autopilot-bench",
+              "estimated_param_count": 1000000000,
+              "param_count_is_estimate": true,
+              "device": "cpu",
+              "dtype": "fp32",
+              "policy": "baseline",
+              "memory_budget_bytes": null,
+              "confidence": "medium",
+              "rationale": [
+                "no CUDA GPU detected -- recommending CPU execution",
+                "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+              ],
+              "warnings": []
+            },
+            "runtime_prediction_source": "measured_history_mean"
+          }
+        },
+        "candidates": [
+          {
+            "option_id": "local-baseline",
+            "target": "local",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.5,
+            "predicted_runtime_seconds": 0.050350772434787514,
+            "predicted_cost_usd": 6.993162838164932e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": true,
+            "rejection_reasons": [],
+            "rationale": [
+              "advisor: cpu/fp32/baseline (confidence=medium)",
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "advisor": {
+                "model_name": "synthetic/autopilot-bench",
+                "estimated_param_count": 1000000000,
+                "param_count_is_estimate": true,
+                "device": "cpu",
+                "dtype": "fp32",
+                "policy": "baseline",
+                "memory_budget_bytes": null,
+                "confidence": "medium",
+                "rationale": [
+                  "no CUDA GPU detected -- recommending CPU execution",
+                  "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+                ],
+                "warnings": []
+              },
+              "runtime_prediction_source": "measured_history_mean"
+            }
+          },
+          {
+            "option_id": "pooled-matcher",
+            "target": "pooled",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": 0.15769888980003635,
+            "predicted_cost_usd": 8.761049433335353e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": false,
+            "rejection_reasons": [
+              "pool unreachable: benchmark: no live pool (--live-pool not set)"
+            ],
+            "rationale": [
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "pool_status": {
+                "reachable": false,
+                "master_url": "http://127.0.0.1:9",
+                "alive_worker_count": 0,
+                "total_reported_memory_gb": 0.0,
+                "checked_worker_count": 0,
+                "error": "benchmark: no live pool (--live-pool not set)",
+                "measured_links": null
+              },
+              "runtime_prediction_source": "measured_history_mean",
+              "router_target": "dedicated"
+            }
+          },
+          {
+            "option_id": "dedicated-flag",
+            "target": "dedicated",
+            "policy": null,
+            "device": null,
+            "dtype": null,
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": null,
+            "predicted_cost_usd": null,
+            "predicted_peak_memory_bytes": null,
+            "feasible": false,
+            "rejection_reasons": [
+              "dedicated is a flag for real provisioned infrastructure \u2014 Autopilot does not call a cloud API or GPU marketplace"
+            ],
+            "rationale": [
+              "surfaced for honesty when local/pool cannot serve the job"
+            ],
+            "source_signals": {}
+          }
+        ],
+        "placement_decision": {
+          "target": "dedicated",
+          "confidence": "low",
+          "rationale": [
+            "decide_placement failed: ModuleNotFoundError: No module named 'transformers'"
+          ],
+          "warnings": [
+            "router placement unavailable \u2014 Autopilot continues with measured pool query"
+          ],
+          "local_recommendation": null,
+          "pool_status": null,
+          "required_memory_gb": null
+        },
+        "local_recommendation": {
+          "model_name": "synthetic/autopilot-bench",
+          "estimated_param_count": 1000000000,
+          "param_count_is_estimate": true,
+          "device": "cpu",
+          "dtype": "fp32",
+          "policy": "baseline",
+          "memory_budget_bytes": null,
+          "confidence": "medium",
+          "rationale": [
+            "no CUDA GPU detected -- recommending CPU execution",
+            "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+          ],
+          "warnings": []
+        },
+        "pool_status": {
+          "reachable": false,
+          "master_url": "http://127.0.0.1:9",
+          "alive_worker_count": 0,
+          "total_reported_memory_gb": 0.0,
+          "checked_worker_count": 0,
+          "error": "benchmark: no live pool (--live-pool not set)",
+          "measured_links": null
+        },
+        "safety": {
+          "pooled_failure_recovery": "watchdog_requeue",
+          "max_job_requeue_attempts": 3,
+          "memory_enforcement": "required_memory_gb \u2192 matcher.memory_fits",
+          "local_hardware_gate": "@tron.remote + detect_hardware (when using @remote)",
+          "checkpoint_recovery": "not supported for arbitrary callables",
+          "distributed_vram": "not claimed \u2014 not demonstrated",
+          "notes": [
+            "Pooled mid-job worker death is recovered by queue_server's watchdog via the spine event log (proven in tests/test_pool_reliability.py).",
+            "After max_job_requeue_attempts, the job fails with an explicit error result instead of requeuing forever.",
+            "Autopilot does not provision 'dedicated' infrastructure."
+          ]
+        },
+        "rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='fixed' chose local-baseline (target=local, predicted_cost_usd=6.993162838164932e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "fixed strategy: ignore advisor/pool; run local baseline"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "timestamp": 1794567731.475999
+      },
+      {
+        "plan_id": "plan_e5a342172fe3",
+        "spec": {
+          "model_name": "synthetic/autopilot-bench",
+          "hourly_rate_usd": 0.5,
+          "budget_usd": 1.0,
+          "deadline_seconds": 30.0,
+          "reliability": "tolerant",
+          "pooled_hourly_rate_usd": 0.2,
+          "expected_runtime_seconds": 0.05,
+          "requires_multi_node": false,
+          "gpu_budget_bytes_override": null,
+          "master_url": null,
+          "costtrace_task": null
+        },
+        "chosen": {
+          "option_id": "local-baseline",
+          "target": "local",
+          "policy": "baseline",
+          "device": "cpu",
+          "dtype": "fp32",
+          "memory_budget_bytes": null,
+          "required_memory_gb": 4.0,
+          "hourly_rate_usd": 0.5,
+          "predicted_runtime_seconds": 0.05035353754167507,
+          "predicted_cost_usd": 6.993546880788204e-06,
+          "predicted_peak_memory_bytes": 4000000000,
+          "feasible": true,
+          "rejection_reasons": [],
+          "rationale": [
+            "advisor: cpu/fp32/baseline (confidence=medium)",
+            "runtime prediction source: measured_history_mean",
+            "fixed strategy: ignore advisor/pool; run local baseline"
+          ],
+          "source_signals": {
+            "advisor": {
+              "model_name": "synthetic/autopilot-bench",
+              "estimated_param_count": 1000000000,
+              "param_count_is_estimate": true,
+              "device": "cpu",
+              "dtype": "fp32",
+              "policy": "baseline",
+              "memory_budget_bytes": null,
+              "confidence": "medium",
+              "rationale": [
+                "no CUDA GPU detected -- recommending CPU execution",
+                "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+              ],
+              "warnings": []
+            },
+            "runtime_prediction_source": "measured_history_mean"
+          }
+        },
+        "candidates": [
+          {
+            "option_id": "local-baseline",
+            "target": "local",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.5,
+            "predicted_runtime_seconds": 0.05035353754167507,
+            "predicted_cost_usd": 6.993546880788204e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": true,
+            "rejection_reasons": [],
+            "rationale": [
+              "advisor: cpu/fp32/baseline (confidence=medium)",
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "advisor": {
+                "model_name": "synthetic/autopilot-bench",
+                "estimated_param_count": 1000000000,
+                "param_count_is_estimate": true,
+                "device": "cpu",
+                "dtype": "fp32",
+                "policy": "baseline",
+                "memory_budget_bytes": null,
+                "confidence": "medium",
+                "rationale": [
+                  "no CUDA GPU detected -- recommending CPU execution",
+                  "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+                ],
+                "warnings": []
+              },
+              "runtime_prediction_source": "measured_history_mean"
+            }
+          },
+          {
+            "option_id": "pooled-matcher",
+            "target": "pooled",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": 0.15769888980003635,
+            "predicted_cost_usd": 8.761049433335353e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": false,
+            "rejection_reasons": [
+              "pool unreachable: benchmark: no live pool (--live-pool not set)"
+            ],
+            "rationale": [
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "pool_status": {
+                "reachable": false,
+                "master_url": "http://127.0.0.1:9",
+                "alive_worker_count": 0,
+                "total_reported_memory_gb": 0.0,
+                "checked_worker_count": 0,
+                "error": "benchmark: no live pool (--live-pool not set)",
+                "measured_links": null
+              },
+              "runtime_prediction_source": "measured_history_mean",
+              "router_target": "dedicated"
+            }
+          },
+          {
+            "option_id": "dedicated-flag",
+            "target": "dedicated",
+            "policy": null,
+            "device": null,
+            "dtype": null,
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": null,
+            "predicted_cost_usd": null,
+            "predicted_peak_memory_bytes": null,
+            "feasible": false,
+            "rejection_reasons": [
+              "dedicated is a flag for real provisioned infrastructure \u2014 Autopilot does not call a cloud API or GPU marketplace"
+            ],
+            "rationale": [
+              "surfaced for honesty when local/pool cannot serve the job"
+            ],
+            "source_signals": {}
+          }
+        ],
+        "placement_decision": {
+          "target": "dedicated",
+          "confidence": "low",
+          "rationale": [
+            "decide_placement failed: ModuleNotFoundError: No module named 'transformers'"
+          ],
+          "warnings": [
+            "router placement unavailable \u2014 Autopilot continues with measured pool query"
+          ],
+          "local_recommendation": null,
+          "pool_status": null,
+          "required_memory_gb": null
+        },
+        "local_recommendation": {
+          "model_name": "synthetic/autopilot-bench",
+          "estimated_param_count": 1000000000,
+          "param_count_is_estimate": true,
+          "device": "cpu",
+          "dtype": "fp32",
+          "policy": "baseline",
+          "memory_budget_bytes": null,
+          "confidence": "medium",
+          "rationale": [
+            "no CUDA GPU detected -- recommending CPU execution",
+            "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+          ],
+          "warnings": []
+        },
+        "pool_status": {
+          "reachable": false,
+          "master_url": "http://127.0.0.1:9",
+          "alive_worker_count": 0,
+          "total_reported_memory_gb": 0.0,
+          "checked_worker_count": 0,
+          "error": "benchmark: no live pool (--live-pool not set)",
+          "measured_links": null
+        },
+        "safety": {
+          "pooled_failure_recovery": "watchdog_requeue",
+          "max_job_requeue_attempts": 3,
+          "memory_enforcement": "required_memory_gb \u2192 matcher.memory_fits",
+          "local_hardware_gate": "@tron.remote + detect_hardware (when using @remote)",
+          "checkpoint_recovery": "not supported for arbitrary callables",
+          "distributed_vram": "not claimed \u2014 not demonstrated",
+          "notes": [
+            "Pooled mid-job worker death is recovered by queue_server's watchdog via the spine event log (proven in tests/test_pool_reliability.py).",
+            "After max_job_requeue_attempts, the job fails with an explicit error result instead of requeuing forever.",
+            "Autopilot does not provision 'dedicated' infrastructure."
+          ]
+        },
+        "rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='fixed' chose local-baseline (target=local, predicted_cost_usd=6.993546880788204e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "fixed strategy: ignore advisor/pool; run local baseline"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "timestamp": 1794567731.527067
+      }
+    ],
+    "cheapest": [
+      {
+        "plan_id": "plan_ccb80213bc69",
+        "spec": {
+          "model_name": "synthetic/autopilot-bench",
+          "hourly_rate_usd": 0.5,
+          "budget_usd": 1.0,
+          "deadline_seconds": 30.0,
+          "reliability": "tolerant",
+          "pooled_hourly_rate_usd": 0.2,
+          "expected_runtime_seconds": 0.05,
+          "requires_multi_node": false,
+          "gpu_budget_bytes_override": null,
+          "master_url": null,
+          "costtrace_task": null
+        },
+        "chosen": {
+          "option_id": "local-baseline",
+          "target": "local",
+          "policy": "baseline",
+          "device": "cpu",
+          "dtype": "fp32",
+          "memory_budget_bytes": null,
+          "required_memory_gb": 4.0,
+          "hourly_rate_usd": 0.5,
+          "predicted_runtime_seconds": 0.050346624840001825,
+          "predicted_cost_usd": 6.992586783333587e-06,
+          "predicted_peak_memory_bytes": 4000000000,
+          "feasible": true,
+          "rejection_reasons": [],
+          "rationale": [
+            "advisor: cpu/fp32/baseline (confidence=medium)",
+            "runtime prediction source: measured_history_mean",
+            "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks"
+          ],
+          "source_signals": {
+            "advisor": {
+              "model_name": "synthetic/autopilot-bench",
+              "estimated_param_count": 1000000000,
+              "param_count_is_estimate": true,
+              "device": "cpu",
+              "dtype": "fp32",
+              "policy": "baseline",
+              "memory_budget_bytes": null,
+              "confidence": "medium",
+              "rationale": [
+                "no CUDA GPU detected -- recommending CPU execution",
+                "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+              ],
+              "warnings": []
+            },
+            "runtime_prediction_source": "measured_history_mean"
+          }
+        },
+        "candidates": [
+          {
+            "option_id": "local-baseline",
+            "target": "local",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.5,
+            "predicted_runtime_seconds": 0.050346624840001825,
+            "predicted_cost_usd": 6.992586783333587e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": true,
+            "rejection_reasons": [],
+            "rationale": [
+              "advisor: cpu/fp32/baseline (confidence=medium)",
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "advisor": {
+                "model_name": "synthetic/autopilot-bench",
+                "estimated_param_count": 1000000000,
+                "param_count_is_estimate": true,
+                "device": "cpu",
+                "dtype": "fp32",
+                "policy": "baseline",
+                "memory_budget_bytes": null,
+                "confidence": "medium",
+                "rationale": [
+                  "no CUDA GPU detected -- recommending CPU execution",
+                  "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+                ],
+                "warnings": []
+              },
+              "runtime_prediction_source": "measured_history_mean"
+            }
+          },
+          {
+            "option_id": "pooled-matcher",
+            "target": "pooled",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": 0.15769888980003635,
+            "predicted_cost_usd": 8.761049433335353e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": false,
+            "rejection_reasons": [
+              "pool unreachable: benchmark: no live pool (--live-pool not set)"
+            ],
+            "rationale": [
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "pool_status": {
+                "reachable": false,
+                "master_url": "http://127.0.0.1:9",
+                "alive_worker_count": 0,
+                "total_reported_memory_gb": 0.0,
+                "checked_worker_count": 0,
+                "error": "benchmark: no live pool (--live-pool not set)",
+                "measured_links": null
+              },
+              "runtime_prediction_source": "measured_history_mean",
+              "router_target": "dedicated"
+            }
+          },
+          {
+            "option_id": "dedicated-flag",
+            "target": "dedicated",
+            "policy": null,
+            "device": null,
+            "dtype": null,
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": null,
+            "predicted_cost_usd": null,
+            "predicted_peak_memory_bytes": null,
+            "feasible": false,
+            "rejection_reasons": [
+              "dedicated is a flag for real provisioned infrastructure \u2014 Autopilot does not call a cloud API or GPU marketplace"
+            ],
+            "rationale": [
+              "surfaced for honesty when local/pool cannot serve the job"
+            ],
+            "source_signals": {}
+          }
+        ],
+        "placement_decision": {
+          "target": "dedicated",
+          "confidence": "low",
+          "rationale": [
+            "decide_placement failed: ModuleNotFoundError: No module named 'transformers'"
+          ],
+          "warnings": [
+            "router placement unavailable \u2014 Autopilot continues with measured pool query"
+          ],
+          "local_recommendation": null,
+          "pool_status": null,
+          "required_memory_gb": null
+        },
+        "local_recommendation": {
+          "model_name": "synthetic/autopilot-bench",
+          "estimated_param_count": 1000000000,
+          "param_count_is_estimate": true,
+          "device": "cpu",
+          "dtype": "fp32",
+          "policy": "baseline",
+          "memory_budget_bytes": null,
+          "confidence": "medium",
+          "rationale": [
+            "no CUDA GPU detected -- recommending CPU execution",
+            "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+          ],
+          "warnings": []
+        },
+        "pool_status": {
+          "reachable": false,
+          "master_url": "http://127.0.0.1:9",
+          "alive_worker_count": 0,
+          "total_reported_memory_gb": 0.0,
+          "checked_worker_count": 0,
+          "error": "benchmark: no live pool (--live-pool not set)",
+          "measured_links": null
+        },
+        "safety": {
+          "pooled_failure_recovery": "watchdog_requeue",
+          "max_job_requeue_attempts": 3,
+          "memory_enforcement": "required_memory_gb \u2192 matcher.memory_fits",
+          "local_hardware_gate": "@tron.remote + detect_hardware (when using @remote)",
+          "checkpoint_recovery": "not supported for arbitrary callables",
+          "distributed_vram": "not claimed \u2014 not demonstrated",
+          "notes": [
+            "Pooled mid-job worker death is recovered by queue_server's watchdog via the spine event log (proven in tests/test_pool_reliability.py).",
+            "After max_job_requeue_attempts, the job fails with an explicit error result instead of requeuing forever.",
+            "Autopilot does not provision 'dedicated' infrastructure."
+          ]
+        },
+        "rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='cheapest' chose local-baseline (target=local, predicted_cost_usd=6.992586783333587e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "timestamp": 1794567731.5780606
+      },
+      {
+        "plan_id": "plan_0a336bd1893b",
+        "spec": {
+          "model_name": "synthetic/autopilot-bench",
+          "hourly_rate_usd": 0.5,
+          "budget_usd": 1.0,
+          "deadline_seconds": 30.0,
+          "reliability": "tolerant",
+          "pooled_hourly_rate_usd": 0.2,
+          "expected_runtime_seconds": 0.05,
+          "requires_multi_node": false,
+          "gpu_budget_bytes_override": null,
+          "master_url": null,
+          "costtrace_task": null
+        },
+        "chosen": {
+          "option_id": "local-baseline",
+          "target": "local",
+          "policy": "baseline",
+          "device": "cpu",
+          "dtype": "fp32",
+          "memory_budget_bytes": null,
+          "required_memory_gb": 4.0,
+          "hourly_rate_usd": 0.5,
+          "predicted_runtime_seconds": 0.050340322384620495,
+          "predicted_cost_usd": 6.991711442308402e-06,
+          "predicted_peak_memory_bytes": 4000000000,
+          "feasible": true,
+          "rejection_reasons": [],
+          "rationale": [
+            "advisor: cpu/fp32/baseline (confidence=medium)",
+            "runtime prediction source: measured_history_mean",
+            "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks"
+          ],
+          "source_signals": {
+            "advisor": {
+              "model_name": "synthetic/autopilot-bench",
+              "estimated_param_count": 1000000000,
+              "param_count_is_estimate": true,
+              "device": "cpu",
+              "dtype": "fp32",
+              "policy": "baseline",
+              "memory_budget_bytes": null,
+              "confidence": "medium",
+              "rationale": [
+                "no CUDA GPU detected -- recommending CPU execution",
+                "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+              ],
+              "warnings": []
+            },
+            "runtime_prediction_source": "measured_history_mean"
+          }
+        },
+        "candidates": [
+          {
+            "option_id": "local-baseline",
+            "target": "local",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.5,
+            "predicted_runtime_seconds": 0.050340322384620495,
+            "predicted_cost_usd": 6.991711442308402e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": true,
+            "rejection_reasons": [],
+            "rationale": [
+              "advisor: cpu/fp32/baseline (confidence=medium)",
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "advisor": {
+                "model_name": "synthetic/autopilot-bench",
+                "estimated_param_count": 1000000000,
+                "param_count_is_estimate": true,
+                "device": "cpu",
+                "dtype": "fp32",
+                "policy": "baseline",
+                "memory_budget_bytes": null,
+                "confidence": "medium",
+                "rationale": [
+                  "no CUDA GPU detected -- recommending CPU execution",
+                  "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+                ],
+                "warnings": []
+              },
+              "runtime_prediction_source": "measured_history_mean"
+            }
+          },
+          {
+            "option_id": "pooled-matcher",
+            "target": "pooled",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": 0.15769888980003635,
+            "predicted_cost_usd": 8.761049433335353e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": false,
+            "rejection_reasons": [
+              "pool unreachable: benchmark: no live pool (--live-pool not set)"
+            ],
+            "rationale": [
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "pool_status": {
+                "reachable": false,
+                "master_url": "http://127.0.0.1:9",
+                "alive_worker_count": 0,
+                "total_reported_memory_gb": 0.0,
+                "checked_worker_count": 0,
+                "error": "benchmark: no live pool (--live-pool not set)",
+                "measured_links": null
+              },
+              "runtime_prediction_source": "measured_history_mean",
+              "router_target": "dedicated"
+            }
+          },
+          {
+            "option_id": "dedicated-flag",
+            "target": "dedicated",
+            "policy": null,
+            "device": null,
+            "dtype": null,
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": null,
+            "predicted_cost_usd": null,
+            "predicted_peak_memory_bytes": null,
+            "feasible": false,
+            "rejection_reasons": [
+              "dedicated is a flag for real provisioned infrastructure \u2014 Autopilot does not call a cloud API or GPU marketplace"
+            ],
+            "rationale": [
+              "surfaced for honesty when local/pool cannot serve the job"
+            ],
+            "source_signals": {}
+          }
+        ],
+        "placement_decision": {
+          "target": "dedicated",
+          "confidence": "low",
+          "rationale": [
+            "decide_placement failed: ModuleNotFoundError: No module named 'transformers'"
+          ],
+          "warnings": [
+            "router placement unavailable \u2014 Autopilot continues with measured pool query"
+          ],
+          "local_recommendation": null,
+          "pool_status": null,
+          "required_memory_gb": null
+        },
+        "local_recommendation": {
+          "model_name": "synthetic/autopilot-bench",
+          "estimated_param_count": 1000000000,
+          "param_count_is_estimate": true,
+          "device": "cpu",
+          "dtype": "fp32",
+          "policy": "baseline",
+          "memory_budget_bytes": null,
+          "confidence": "medium",
+          "rationale": [
+            "no CUDA GPU detected -- recommending CPU execution",
+            "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+          ],
+          "warnings": []
+        },
+        "pool_status": {
+          "reachable": false,
+          "master_url": "http://127.0.0.1:9",
+          "alive_worker_count": 0,
+          "total_reported_memory_gb": 0.0,
+          "checked_worker_count": 0,
+          "error": "benchmark: no live pool (--live-pool not set)",
+          "measured_links": null
+        },
+        "safety": {
+          "pooled_failure_recovery": "watchdog_requeue",
+          "max_job_requeue_attempts": 3,
+          "memory_enforcement": "required_memory_gb \u2192 matcher.memory_fits",
+          "local_hardware_gate": "@tron.remote + detect_hardware (when using @remote)",
+          "checkpoint_recovery": "not supported for arbitrary callables",
+          "distributed_vram": "not claimed \u2014 not demonstrated",
+          "notes": [
+            "Pooled mid-job worker death is recovered by queue_server's watchdog via the spine event log (proven in tests/test_pool_reliability.py).",
+            "After max_job_requeue_attempts, the job fails with an explicit error result instead of requeuing forever.",
+            "Autopilot does not provision 'dedicated' infrastructure."
+          ]
+        },
+        "rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='cheapest' chose local-baseline (target=local, predicted_cost_usd=6.991711442308402e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "timestamp": 1794567731.6289
+      },
+      {
+        "plan_id": "plan_475d1cf30425",
+        "spec": {
+          "model_name": "synthetic/autopilot-bench",
+          "hourly_rate_usd": 0.5,
+          "budget_usd": 1.0,
+          "deadline_seconds": 30.0,
+          "reliability": "tolerant",
+          "pooled_hourly_rate_usd": 0.2,
+          "expected_runtime_seconds": 0.05,
+          "requires_multi_node": false,
+          "gpu_budget_bytes_override": null,
+          "master_url": null,
+          "costtrace_task": null
+        },
+        "chosen": {
+          "option_id": "local-baseline",
+          "target": "local",
+          "policy": "baseline",
+          "device": "cpu",
+          "dtype": "fp32",
+          "memory_budget_bytes": null,
+          "required_memory_gb": 4.0,
+          "hourly_rate_usd": 0.5,
+          "predicted_runtime_seconds": 0.05033619237037109,
+          "predicted_cost_usd": 6.991137829218207e-06,
+          "predicted_peak_memory_bytes": 4000000000,
+          "feasible": true,
+          "rejection_reasons": [],
+          "rationale": [
+            "advisor: cpu/fp32/baseline (confidence=medium)",
+            "runtime prediction source: measured_history_mean",
+            "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks"
+          ],
+          "source_signals": {
+            "advisor": {
+              "model_name": "synthetic/autopilot-bench",
+              "estimated_param_count": 1000000000,
+              "param_count_is_estimate": true,
+              "device": "cpu",
+              "dtype": "fp32",
+              "policy": "baseline",
+              "memory_budget_bytes": null,
+              "confidence": "medium",
+              "rationale": [
+                "no CUDA GPU detected -- recommending CPU execution",
+                "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+              ],
+              "warnings": []
+            },
+            "runtime_prediction_source": "measured_history_mean"
+          }
+        },
+        "candidates": [
+          {
+            "option_id": "local-baseline",
+            "target": "local",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.5,
+            "predicted_runtime_seconds": 0.05033619237037109,
+            "predicted_cost_usd": 6.991137829218207e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": true,
+            "rejection_reasons": [],
+            "rationale": [
+              "advisor: cpu/fp32/baseline (confidence=medium)",
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "advisor": {
+                "model_name": "synthetic/autopilot-bench",
+                "estimated_param_count": 1000000000,
+                "param_count_is_estimate": true,
+                "device": "cpu",
+                "dtype": "fp32",
+                "policy": "baseline",
+                "memory_budget_bytes": null,
+                "confidence": "medium",
+                "rationale": [
+                  "no CUDA GPU detected -- recommending CPU execution",
+                  "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+                ],
+                "warnings": []
+              },
+              "runtime_prediction_source": "measured_history_mean"
+            }
+          },
+          {
+            "option_id": "pooled-matcher",
+            "target": "pooled",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": 0.15769888980003635,
+            "predicted_cost_usd": 8.761049433335353e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": false,
+            "rejection_reasons": [
+              "pool unreachable: benchmark: no live pool (--live-pool not set)"
+            ],
+            "rationale": [
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "pool_status": {
+                "reachable": false,
+                "master_url": "http://127.0.0.1:9",
+                "alive_worker_count": 0,
+                "total_reported_memory_gb": 0.0,
+                "checked_worker_count": 0,
+                "error": "benchmark: no live pool (--live-pool not set)",
+                "measured_links": null
+              },
+              "runtime_prediction_source": "measured_history_mean",
+              "router_target": "dedicated"
+            }
+          },
+          {
+            "option_id": "dedicated-flag",
+            "target": "dedicated",
+            "policy": null,
+            "device": null,
+            "dtype": null,
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": null,
+            "predicted_cost_usd": null,
+            "predicted_peak_memory_bytes": null,
+            "feasible": false,
+            "rejection_reasons": [
+              "dedicated is a flag for real provisioned infrastructure \u2014 Autopilot does not call a cloud API or GPU marketplace"
+            ],
+            "rationale": [
+              "surfaced for honesty when local/pool cannot serve the job"
+            ],
+            "source_signals": {}
+          }
+        ],
+        "placement_decision": {
+          "target": "dedicated",
+          "confidence": "low",
+          "rationale": [
+            "decide_placement failed: ModuleNotFoundError: No module named 'transformers'"
+          ],
+          "warnings": [
+            "router placement unavailable \u2014 Autopilot continues with measured pool query"
+          ],
+          "local_recommendation": null,
+          "pool_status": null,
+          "required_memory_gb": null
+        },
+        "local_recommendation": {
+          "model_name": "synthetic/autopilot-bench",
+          "estimated_param_count": 1000000000,
+          "param_count_is_estimate": true,
+          "device": "cpu",
+          "dtype": "fp32",
+          "policy": "baseline",
+          "memory_budget_bytes": null,
+          "confidence": "medium",
+          "rationale": [
+            "no CUDA GPU detected -- recommending CPU execution",
+            "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+          ],
+          "warnings": []
+        },
+        "pool_status": {
+          "reachable": false,
+          "master_url": "http://127.0.0.1:9",
+          "alive_worker_count": 0,
+          "total_reported_memory_gb": 0.0,
+          "checked_worker_count": 0,
+          "error": "benchmark: no live pool (--live-pool not set)",
+          "measured_links": null
+        },
+        "safety": {
+          "pooled_failure_recovery": "watchdog_requeue",
+          "max_job_requeue_attempts": 3,
+          "memory_enforcement": "required_memory_gb \u2192 matcher.memory_fits",
+          "local_hardware_gate": "@tron.remote + detect_hardware (when using @remote)",
+          "checkpoint_recovery": "not supported for arbitrary callables",
+          "distributed_vram": "not claimed \u2014 not demonstrated",
+          "notes": [
+            "Pooled mid-job worker death is recovered by queue_server's watchdog via the spine event log (proven in tests/test_pool_reliability.py).",
+            "After max_job_requeue_attempts, the job fails with an explicit error result instead of requeuing forever.",
+            "Autopilot does not provision 'dedicated' infrastructure."
+          ]
+        },
+        "rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='cheapest' chose local-baseline (target=local, predicted_cost_usd=6.991137829218207e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "timestamp": 1794567731.6797383
+      }
+    ],
+    "autopilot": [
+      {
+        "plan_id": "plan_323184a59a3d",
+        "spec": {
+          "model_name": "synthetic/autopilot-bench",
+          "hourly_rate_usd": 0.5,
+          "budget_usd": 1.0,
+          "deadline_seconds": 30.0,
+          "reliability": "tolerant",
+          "pooled_hourly_rate_usd": 0.2,
+          "expected_runtime_seconds": 0.05,
+          "requires_multi_node": false,
+          "gpu_budget_bytes_override": null,
+          "master_url": null,
+          "costtrace_task": null
+        },
+        "chosen": {
+          "option_id": "local-baseline",
+          "target": "local",
+          "policy": "baseline",
+          "device": "cpu",
+          "dtype": "fp32",
+          "memory_budget_bytes": null,
+          "required_memory_gb": 4.0,
+          "hourly_rate_usd": 0.5,
+          "predicted_runtime_seconds": 0.050330542464286865,
+          "predicted_cost_usd": 6.990353120039842e-06,
+          "predicted_peak_memory_bytes": 4000000000,
+          "feasible": true,
+          "rejection_reasons": [],
+          "rationale": [
+            "advisor: cpu/fp32/baseline (confidence=medium)",
+            "runtime prediction source: measured_history_mean"
+          ],
+          "source_signals": {
+            "advisor": {
+              "model_name": "synthetic/autopilot-bench",
+              "estimated_param_count": 1000000000,
+              "param_count_is_estimate": true,
+              "device": "cpu",
+              "dtype": "fp32",
+              "policy": "baseline",
+              "memory_budget_bytes": null,
+              "confidence": "medium",
+              "rationale": [
+                "no CUDA GPU detected -- recommending CPU execution",
+                "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+              ],
+              "warnings": []
+            },
+            "runtime_prediction_source": "measured_history_mean"
+          }
+        },
+        "candidates": [
+          {
+            "option_id": "local-baseline",
+            "target": "local",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.5,
+            "predicted_runtime_seconds": 0.050330542464286865,
+            "predicted_cost_usd": 6.990353120039842e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": true,
+            "rejection_reasons": [],
+            "rationale": [
+              "advisor: cpu/fp32/baseline (confidence=medium)",
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "advisor": {
+                "model_name": "synthetic/autopilot-bench",
+                "estimated_param_count": 1000000000,
+                "param_count_is_estimate": true,
+                "device": "cpu",
+                "dtype": "fp32",
+                "policy": "baseline",
+                "memory_budget_bytes": null,
+                "confidence": "medium",
+                "rationale": [
+                  "no CUDA GPU detected -- recommending CPU execution",
+                  "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+                ],
+                "warnings": []
+              },
+              "runtime_prediction_source": "measured_history_mean"
+            }
+          },
+          {
+            "option_id": "pooled-matcher",
+            "target": "pooled",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": 0.15769888980003635,
+            "predicted_cost_usd": 8.761049433335353e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": false,
+            "rejection_reasons": [
+              "pool unreachable: benchmark: no live pool (--live-pool not set)"
+            ],
+            "rationale": [
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "pool_status": {
+                "reachable": false,
+                "master_url": "http://127.0.0.1:9",
+                "alive_worker_count": 0,
+                "total_reported_memory_gb": 0.0,
+                "checked_worker_count": 0,
+                "error": "benchmark: no live pool (--live-pool not set)",
+                "measured_links": null
+              },
+              "runtime_prediction_source": "measured_history_mean",
+              "router_target": "dedicated"
+            }
+          },
+          {
+            "option_id": "dedicated-flag",
+            "target": "dedicated",
+            "policy": null,
+            "device": null,
+            "dtype": null,
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": null,
+            "predicted_cost_usd": null,
+            "predicted_peak_memory_bytes": null,
+            "feasible": false,
+            "rejection_reasons": [
+              "dedicated is a flag for real provisioned infrastructure \u2014 Autopilot does not call a cloud API or GPU marketplace"
+            ],
+            "rationale": [
+              "surfaced for honesty when local/pool cannot serve the job"
+            ],
+            "source_signals": {}
+          }
+        ],
+        "placement_decision": {
+          "target": "dedicated",
+          "confidence": "low",
+          "rationale": [
+            "decide_placement failed: ModuleNotFoundError: No module named 'transformers'"
+          ],
+          "warnings": [
+            "router placement unavailable \u2014 Autopilot continues with measured pool query"
+          ],
+          "local_recommendation": null,
+          "pool_status": null,
+          "required_memory_gb": null
+        },
+        "local_recommendation": {
+          "model_name": "synthetic/autopilot-bench",
+          "estimated_param_count": 1000000000,
+          "param_count_is_estimate": true,
+          "device": "cpu",
+          "dtype": "fp32",
+          "policy": "baseline",
+          "memory_budget_bytes": null,
+          "confidence": "medium",
+          "rationale": [
+            "no CUDA GPU detected -- recommending CPU execution",
+            "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+          ],
+          "warnings": []
+        },
+        "pool_status": {
+          "reachable": false,
+          "master_url": "http://127.0.0.1:9",
+          "alive_worker_count": 0,
+          "total_reported_memory_gb": 0.0,
+          "checked_worker_count": 0,
+          "error": "benchmark: no live pool (--live-pool not set)",
+          "measured_links": null
+        },
+        "safety": {
+          "pooled_failure_recovery": "watchdog_requeue",
+          "max_job_requeue_attempts": 3,
+          "memory_enforcement": "required_memory_gb \u2192 matcher.memory_fits",
+          "local_hardware_gate": "@tron.remote + detect_hardware (when using @remote)",
+          "checkpoint_recovery": "not supported for arbitrary callables",
+          "distributed_vram": "not claimed \u2014 not demonstrated",
+          "notes": [
+            "Pooled mid-job worker death is recovered by queue_server's watchdog via the spine event log (proven in tests/test_pool_reliability.py).",
+            "After max_job_requeue_attempts, the job fails with an explicit error result instead of requeuing forever.",
+            "Autopilot does not provision 'dedicated' infrastructure."
+          ]
+        },
+        "rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='autopilot' chose local-baseline (target=local, predicted_cost_usd=6.990353120039842e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "timestamp": 1794567731.7305586
+      },
+      {
+        "plan_id": "plan_f914085d0817",
+        "spec": {
+          "model_name": "synthetic/autopilot-bench",
+          "hourly_rate_usd": 0.5,
+          "budget_usd": 1.0,
+          "deadline_seconds": 30.0,
+          "reliability": "tolerant",
+          "pooled_hourly_rate_usd": 0.2,
+          "expected_runtime_seconds": 0.05,
+          "requires_multi_node": false,
+          "gpu_budget_bytes_override": null,
+          "master_url": null,
+          "costtrace_task": null
+        },
+        "chosen": {
+          "option_id": "local-baseline",
+          "target": "local",
+          "policy": "baseline",
+          "device": "cpu",
+          "dtype": "fp32",
+          "memory_budget_bytes": null,
+          "required_memory_gb": 4.0,
+          "hourly_rate_usd": 0.5,
+          "predicted_runtime_seconds": 0.0503239916896542,
+          "predicted_cost_usd": 6.98944329022975e-06,
+          "predicted_peak_memory_bytes": 4000000000,
+          "feasible": true,
+          "rejection_reasons": [],
+          "rationale": [
+            "advisor: cpu/fp32/baseline (confidence=medium)",
+            "runtime prediction source: measured_history_mean"
+          ],
+          "source_signals": {
+            "advisor": {
+              "model_name": "synthetic/autopilot-bench",
+              "estimated_param_count": 1000000000,
+              "param_count_is_estimate": true,
+              "device": "cpu",
+              "dtype": "fp32",
+              "policy": "baseline",
+              "memory_budget_bytes": null,
+              "confidence": "medium",
+              "rationale": [
+                "no CUDA GPU detected -- recommending CPU execution",
+                "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+              ],
+              "warnings": []
+            },
+            "runtime_prediction_source": "measured_history_mean"
+          }
+        },
+        "candidates": [
+          {
+            "option_id": "local-baseline",
+            "target": "local",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.5,
+            "predicted_runtime_seconds": 0.0503239916896542,
+            "predicted_cost_usd": 6.98944329022975e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": true,
+            "rejection_reasons": [],
+            "rationale": [
+              "advisor: cpu/fp32/baseline (confidence=medium)",
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "advisor": {
+                "model_name": "synthetic/autopilot-bench",
+                "estimated_param_count": 1000000000,
+                "param_count_is_estimate": true,
+                "device": "cpu",
+                "dtype": "fp32",
+                "policy": "baseline",
+                "memory_budget_bytes": null,
+                "confidence": "medium",
+                "rationale": [
+                  "no CUDA GPU detected -- recommending CPU execution",
+                  "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+                ],
+                "warnings": []
+              },
+              "runtime_prediction_source": "measured_history_mean"
+            }
+          },
+          {
+            "option_id": "pooled-matcher",
+            "target": "pooled",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": 0.15769888980003635,
+            "predicted_cost_usd": 8.761049433335353e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": false,
+            "rejection_reasons": [
+              "pool unreachable: benchmark: no live pool (--live-pool not set)"
+            ],
+            "rationale": [
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "pool_status": {
+                "reachable": false,
+                "master_url": "http://127.0.0.1:9",
+                "alive_worker_count": 0,
+                "total_reported_memory_gb": 0.0,
+                "checked_worker_count": 0,
+                "error": "benchmark: no live pool (--live-pool not set)",
+                "measured_links": null
+              },
+              "runtime_prediction_source": "measured_history_mean",
+              "router_target": "dedicated"
+            }
+          },
+          {
+            "option_id": "dedicated-flag",
+            "target": "dedicated",
+            "policy": null,
+            "device": null,
+            "dtype": null,
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": null,
+            "predicted_cost_usd": null,
+            "predicted_peak_memory_bytes": null,
+            "feasible": false,
+            "rejection_reasons": [
+              "dedicated is a flag for real provisioned infrastructure \u2014 Autopilot does not call a cloud API or GPU marketplace"
+            ],
+            "rationale": [
+              "surfaced for honesty when local/pool cannot serve the job"
+            ],
+            "source_signals": {}
+          }
+        ],
+        "placement_decision": {
+          "target": "dedicated",
+          "confidence": "low",
+          "rationale": [
+            "decide_placement failed: ModuleNotFoundError: No module named 'transformers'"
+          ],
+          "warnings": [
+            "router placement unavailable \u2014 Autopilot continues with measured pool query"
+          ],
+          "local_recommendation": null,
+          "pool_status": null,
+          "required_memory_gb": null
+        },
+        "local_recommendation": {
+          "model_name": "synthetic/autopilot-bench",
+          "estimated_param_count": 1000000000,
+          "param_count_is_estimate": true,
+          "device": "cpu",
+          "dtype": "fp32",
+          "policy": "baseline",
+          "memory_budget_bytes": null,
+          "confidence": "medium",
+          "rationale": [
+            "no CUDA GPU detected -- recommending CPU execution",
+            "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+          ],
+          "warnings": []
+        },
+        "pool_status": {
+          "reachable": false,
+          "master_url": "http://127.0.0.1:9",
+          "alive_worker_count": 0,
+          "total_reported_memory_gb": 0.0,
+          "checked_worker_count": 0,
+          "error": "benchmark: no live pool (--live-pool not set)",
+          "measured_links": null
+        },
+        "safety": {
+          "pooled_failure_recovery": "watchdog_requeue",
+          "max_job_requeue_attempts": 3,
+          "memory_enforcement": "required_memory_gb \u2192 matcher.memory_fits",
+          "local_hardware_gate": "@tron.remote + detect_hardware (when using @remote)",
+          "checkpoint_recovery": "not supported for arbitrary callables",
+          "distributed_vram": "not claimed \u2014 not demonstrated",
+          "notes": [
+            "Pooled mid-job worker death is recovered by queue_server's watchdog via the spine event log (proven in tests/test_pool_reliability.py).",
+            "After max_job_requeue_attempts, the job fails with an explicit error result instead of requeuing forever.",
+            "Autopilot does not provision 'dedicated' infrastructure."
+          ]
+        },
+        "rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='autopilot' chose local-baseline (target=local, predicted_cost_usd=6.98944329022975e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "timestamp": 1794567731.7813401
+      },
+      {
+        "plan_id": "plan_16cfe99e42be",
+        "spec": {
+          "model_name": "synthetic/autopilot-bench",
+          "hourly_rate_usd": 0.5,
+          "budget_usd": 1.0,
+          "deadline_seconds": 30.0,
+          "reliability": "tolerant",
+          "pooled_hourly_rate_usd": 0.2,
+          "expected_runtime_seconds": 0.05,
+          "requires_multi_node": false,
+          "gpu_budget_bytes_override": null,
+          "master_url": null,
+          "costtrace_task": null
+        },
+        "chosen": {
+          "option_id": "local-baseline",
+          "target": "local",
+          "policy": "baseline",
+          "device": "cpu",
+          "dtype": "fp32",
+          "memory_budget_bytes": null,
+          "required_memory_gb": 4.0,
+          "hourly_rate_usd": 0.5,
+          "predicted_runtime_seconds": 0.05032110210000307,
+          "predicted_cost_usd": 6.989041958333759e-06,
+          "predicted_peak_memory_bytes": 4000000000,
+          "feasible": true,
+          "rejection_reasons": [],
+          "rationale": [
+            "advisor: cpu/fp32/baseline (confidence=medium)",
+            "runtime prediction source: measured_history_mean"
+          ],
+          "source_signals": {
+            "advisor": {
+              "model_name": "synthetic/autopilot-bench",
+              "estimated_param_count": 1000000000,
+              "param_count_is_estimate": true,
+              "device": "cpu",
+              "dtype": "fp32",
+              "policy": "baseline",
+              "memory_budget_bytes": null,
+              "confidence": "medium",
+              "rationale": [
+                "no CUDA GPU detected -- recommending CPU execution",
+                "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+              ],
+              "warnings": []
+            },
+            "runtime_prediction_source": "measured_history_mean"
+          }
+        },
+        "candidates": [
+          {
+            "option_id": "local-baseline",
+            "target": "local",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.5,
+            "predicted_runtime_seconds": 0.05032110210000307,
+            "predicted_cost_usd": 6.989041958333759e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": true,
+            "rejection_reasons": [],
+            "rationale": [
+              "advisor: cpu/fp32/baseline (confidence=medium)",
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "advisor": {
+                "model_name": "synthetic/autopilot-bench",
+                "estimated_param_count": 1000000000,
+                "param_count_is_estimate": true,
+                "device": "cpu",
+                "dtype": "fp32",
+                "policy": "baseline",
+                "memory_budget_bytes": null,
+                "confidence": "medium",
+                "rationale": [
+                  "no CUDA GPU detected -- recommending CPU execution",
+                  "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+                ],
+                "warnings": []
+              },
+              "runtime_prediction_source": "measured_history_mean"
+            }
+          },
+          {
+            "option_id": "pooled-matcher",
+            "target": "pooled",
+            "policy": "baseline",
+            "device": "cpu",
+            "dtype": "fp32",
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": 0.15769888980003635,
+            "predicted_cost_usd": 8.761049433335353e-06,
+            "predicted_peak_memory_bytes": 4000000000,
+            "feasible": false,
+            "rejection_reasons": [
+              "pool unreachable: benchmark: no live pool (--live-pool not set)"
+            ],
+            "rationale": [
+              "runtime prediction source: measured_history_mean"
+            ],
+            "source_signals": {
+              "pool_status": {
+                "reachable": false,
+                "master_url": "http://127.0.0.1:9",
+                "alive_worker_count": 0,
+                "total_reported_memory_gb": 0.0,
+                "checked_worker_count": 0,
+                "error": "benchmark: no live pool (--live-pool not set)",
+                "measured_links": null
+              },
+              "runtime_prediction_source": "measured_history_mean",
+              "router_target": "dedicated"
+            }
+          },
+          {
+            "option_id": "dedicated-flag",
+            "target": "dedicated",
+            "policy": null,
+            "device": null,
+            "dtype": null,
+            "memory_budget_bytes": null,
+            "required_memory_gb": 4.0,
+            "hourly_rate_usd": 0.2,
+            "predicted_runtime_seconds": null,
+            "predicted_cost_usd": null,
+            "predicted_peak_memory_bytes": null,
+            "feasible": false,
+            "rejection_reasons": [
+              "dedicated is a flag for real provisioned infrastructure \u2014 Autopilot does not call a cloud API or GPU marketplace"
+            ],
+            "rationale": [
+              "surfaced for honesty when local/pool cannot serve the job"
+            ],
+            "source_signals": {}
+          }
+        ],
+        "placement_decision": {
+          "target": "dedicated",
+          "confidence": "low",
+          "rationale": [
+            "decide_placement failed: ModuleNotFoundError: No module named 'transformers'"
+          ],
+          "warnings": [
+            "router placement unavailable \u2014 Autopilot continues with measured pool query"
+          ],
+          "local_recommendation": null,
+          "pool_status": null,
+          "required_memory_gb": null
+        },
+        "local_recommendation": {
+          "model_name": "synthetic/autopilot-bench",
+          "estimated_param_count": 1000000000,
+          "param_count_is_estimate": true,
+          "device": "cpu",
+          "dtype": "fp32",
+          "policy": "baseline",
+          "memory_budget_bytes": null,
+          "confidence": "medium",
+          "rationale": [
+            "no CUDA GPU detected -- recommending CPU execution",
+            "fp32 weights (4,000,000,000 bytes) fit comfortably in 8,589,934,592 bytes of system RAM."
+          ],
+          "warnings": []
+        },
+        "pool_status": {
+          "reachable": false,
+          "master_url": "http://127.0.0.1:9",
+          "alive_worker_count": 0,
+          "total_reported_memory_gb": 0.0,
+          "checked_worker_count": 0,
+          "error": "benchmark: no live pool (--live-pool not set)",
+          "measured_links": null
+        },
+        "safety": {
+          "pooled_failure_recovery": "watchdog_requeue",
+          "max_job_requeue_attempts": 3,
+          "memory_enforcement": "required_memory_gb \u2192 matcher.memory_fits",
+          "local_hardware_gate": "@tron.remote + detect_hardware (when using @remote)",
+          "checkpoint_recovery": "not supported for arbitrary callables",
+          "distributed_vram": "not claimed \u2014 not demonstrated",
+          "notes": [
+            "Pooled mid-job worker death is recovered by queue_server's watchdog via the spine event log (proven in tests/test_pool_reliability.py).",
+            "After max_job_requeue_attempts, the job fails with an explicit error result instead of requeuing forever.",
+            "Autopilot does not provision 'dedicated' infrastructure."
+          ]
+        },
+        "rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='autopilot' chose local-baseline (target=local, predicted_cost_usd=6.989041958333759e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "timestamp": 1794567731.8322031
+      }
+    ]
+  },
+  "outcomes": {
+    "fixed": [
+      {
+        "plan_id": "plan_e9b45820d3c1",
+        "success": true,
+        "target": "local",
+        "strategy": "fixed",
+        "actual_runtime_seconds": 0.05067337599984967,
+        "actual_cost_usd": 7.03796888886801e-06,
+        "actual_peak_memory_bytes": null,
+        "predicted_runtime_seconds": 0.0503361086363756,
+        "predicted_cost_usd": 6.991126199496612e-06,
+        "predicted_peak_memory_bytes": 4000000000,
+        "result": {
+          "ok": true,
+          "checksum": 0,
+          "allocate_mb": 1
+        },
+        "error": null,
+        "recovery": {
+          "mechanism": "none_local_inprocess"
+        },
+        "decision_rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='fixed' chose local-baseline (target=local, predicted_cost_usd=6.991126199496612e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "fixed strategy: ignore advisor/pool; run local baseline",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "fixed strategy: ignore advisor/pool; run local baseline"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "job_id": null,
+        "timestamp": 1794567731.4754968,
+        "feedback": {
+          "runtime_seconds_delta": 0.00033726736347406555,
+          "cost_usd_delta": 4.684268937139798e-08,
+          "peak_memory_bytes_delta": null,
+          "success": true
+        }
+      },
+      {
+        "plan_id": "plan_d2e28feaaa7e",
+        "success": true,
+        "target": "local",
+        "strategy": "fixed",
+        "actual_runtime_seconds": 0.05041713500008882,
+        "actual_cost_usd": 7.002379861123447e-06,
+        "actual_peak_memory_bytes": null,
+        "predicted_runtime_seconds": 0.050350772434787514,
+        "predicted_cost_usd": 6.993162838164932e-06,
+        "predicted_peak_memory_bytes": 4000000000,
+        "result": {
+          "ok": true,
+          "checksum": 0,
+          "allocate_mb": 1
+        },
+        "error": null,
+        "recovery": {
+          "mechanism": "none_local_inprocess"
+        },
+        "decision_rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='fixed' chose local-baseline (target=local, predicted_cost_usd=6.993162838164932e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "fixed strategy: ignore advisor/pool; run local baseline",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "fixed strategy: ignore advisor/pool; run local baseline"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "job_id": null,
+        "timestamp": 1794567731.5265725,
+        "feedback": {
+          "runtime_seconds_delta": 6.636256530130613e-05,
+          "cost_usd_delta": 9.217022958515158e-09,
+          "peak_memory_bytes_delta": null,
+          "success": true
+        }
+      },
+      {
+        "plan_id": "plan_e5a342172fe3",
+        "success": true,
+        "target": "local",
+        "strategy": "fixed",
+        "actual_runtime_seconds": 0.05018071999984386,
+        "actual_cost_usd": 6.969544444422758e-06,
+        "actual_peak_memory_bytes": null,
+        "predicted_runtime_seconds": 0.05035353754167507,
+        "predicted_cost_usd": 6.993546880788204e-06,
+        "predicted_peak_memory_bytes": 4000000000,
+        "result": {
+          "ok": true,
+          "checksum": 0,
+          "allocate_mb": 1
+        },
+        "error": null,
+        "recovery": {
+          "mechanism": "none_local_inprocess"
+        },
+        "decision_rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='fixed' chose local-baseline (target=local, predicted_cost_usd=6.993546880788204e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "fixed strategy: ignore advisor/pool; run local baseline",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "fixed strategy: ignore advisor/pool; run local baseline"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "job_id": null,
+        "timestamp": 1794567731.5773778,
+        "feedback": {
+          "runtime_seconds_delta": -0.00017281754183121056,
+          "cost_usd_delta": -2.400243636544564e-08,
+          "peak_memory_bytes_delta": null,
+          "success": true
+        }
+      }
+    ],
+    "cheapest": [
+      {
+        "plan_id": "plan_ccb80213bc69",
+        "success": true,
+        "target": "local",
+        "strategy": "cheapest",
+        "actual_runtime_seconds": 0.05018276100008734,
+        "actual_cost_usd": 6.969827916678797e-06,
+        "actual_peak_memory_bytes": null,
+        "predicted_runtime_seconds": 0.050346624840001825,
+        "predicted_cost_usd": 6.992586783333587e-06,
+        "predicted_peak_memory_bytes": 4000000000,
+        "result": {
+          "ok": true,
+          "checksum": 0,
+          "allocate_mb": 1
+        },
+        "error": null,
+        "recovery": {
+          "mechanism": "none_local_inprocess"
+        },
+        "decision_rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='cheapest' chose local-baseline (target=local, predicted_cost_usd=6.992586783333587e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "job_id": null,
+        "timestamp": 1794567731.628404,
+        "feedback": {
+          "runtime_seconds_delta": -0.0001638638399144854,
+          "cost_usd_delta": -2.275886665479002e-08,
+          "peak_memory_bytes_delta": null,
+          "success": true
+        }
+      },
+      {
+        "plan_id": "plan_0a336bd1893b",
+        "success": true,
+        "target": "local",
+        "strategy": "cheapest",
+        "actual_runtime_seconds": 0.0502288119998866,
+        "actual_cost_usd": 6.976223888873139e-06,
+        "actual_peak_memory_bytes": null,
+        "predicted_runtime_seconds": 0.050340322384620495,
+        "predicted_cost_usd": 6.991711442308402e-06,
+        "predicted_peak_memory_bytes": 4000000000,
+        "result": {
+          "ok": true,
+          "checksum": 0,
+          "allocate_mb": 1
+        },
+        "error": null,
+        "recovery": {
+          "mechanism": "none_local_inprocess"
+        },
+        "decision_rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='cheapest' chose local-baseline (target=local, predicted_cost_usd=6.991711442308402e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "job_id": null,
+        "timestamp": 1794567731.6792676,
+        "feedback": {
+          "runtime_seconds_delta": -0.00011151038473389274,
+          "cost_usd_delta": -1.548755343526329e-08,
+          "peak_memory_bytes_delta": null,
+          "success": true
+        }
+      },
+      {
+        "plan_id": "plan_475d1cf30425",
+        "success": true,
+        "target": "local",
+        "strategy": "cheapest",
+        "actual_runtime_seconds": 0.05017799500001274,
+        "actual_cost_usd": 6.969165972223992e-06,
+        "actual_peak_memory_bytes": null,
+        "predicted_runtime_seconds": 0.05033619237037109,
+        "predicted_cost_usd": 6.991137829218207e-06,
+        "predicted_peak_memory_bytes": 4000000000,
+        "result": {
+          "ok": true,
+          "checksum": 0,
+          "allocate_mb": 1
+        },
+        "error": null,
+        "recovery": {
+          "mechanism": "none_local_inprocess"
+        },
+        "decision_rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='cheapest' chose local-baseline (target=local, predicted_cost_usd=6.991137829218207e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "cheapest strategy: minimize expected $/run using hourly rate (and predicted runtime when known); memory-fit warnings are not treated as hard blocks"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "job_id": null,
+        "timestamp": 1794567731.73005,
+        "feedback": {
+          "runtime_seconds_delta": -0.00015819737035834697,
+          "cost_usd_delta": -2.1971856994215444e-08,
+          "peak_memory_bytes_delta": null,
+          "success": true
+        }
+      }
+    ],
+    "autopilot": [
+      {
+        "plan_id": "plan_323184a59a3d",
+        "success": true,
+        "target": "local",
+        "strategy": "autopilot",
+        "actual_runtime_seconds": 0.050140569999939544,
+        "actual_cost_usd": 6.963968055547159e-06,
+        "actual_peak_memory_bytes": null,
+        "predicted_runtime_seconds": 0.050330542464286865,
+        "predicted_cost_usd": 6.990353120039842e-06,
+        "predicted_peak_memory_bytes": 4000000000,
+        "result": {
+          "ok": true,
+          "checksum": 0,
+          "allocate_mb": 1
+        },
+        "error": null,
+        "recovery": {
+          "mechanism": "none_local_inprocess"
+        },
+        "decision_rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='autopilot' chose local-baseline (target=local, predicted_cost_usd=6.990353120039842e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "job_id": null,
+        "timestamp": 1794567731.7808282,
+        "feedback": {
+          "runtime_seconds_delta": -0.00018997246434732107,
+          "cost_usd_delta": -2.6385064492682962e-08,
+          "peak_memory_bytes_delta": null,
+          "success": true
+        }
+      },
+      {
+        "plan_id": "plan_f914085d0817",
+        "success": true,
+        "target": "local",
+        "strategy": "autopilot",
+        "actual_runtime_seconds": 0.050237304000120275,
+        "actual_cost_usd": 6.9774033333500385e-06,
+        "actual_peak_memory_bytes": null,
+        "predicted_runtime_seconds": 0.0503239916896542,
+        "predicted_cost_usd": 6.98944329022975e-06,
+        "predicted_peak_memory_bytes": 4000000000,
+        "result": {
+          "ok": true,
+          "checksum": 0,
+          "allocate_mb": 1
+        },
+        "error": null,
+        "recovery": {
+          "mechanism": "none_local_inprocess"
+        },
+        "decision_rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='autopilot' chose local-baseline (target=local, predicted_cost_usd=6.98944329022975e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "job_id": null,
+        "timestamp": 1794567731.8317163,
+        "feedback": {
+          "runtime_seconds_delta": -8.668768953392497e-05,
+          "cost_usd_delta": -1.2039956879711207e-08,
+          "peak_memory_bytes_delta": null,
+          "success": true
+        }
+      },
+      {
+        "plan_id": "plan_16cfe99e42be",
+        "success": true,
+        "target": "local",
+        "strategy": "autopilot",
+        "actual_runtime_seconds": 0.05012121599997954,
+        "actual_cost_usd": 6.961279999997158e-06,
+        "actual_peak_memory_bytes": null,
+        "predicted_runtime_seconds": 0.05032110210000307,
+        "predicted_cost_usd": 6.989041958333759e-06,
+        "predicted_peak_memory_bytes": 4000000000,
+        "result": {
+          "ok": true,
+          "checksum": 0,
+          "allocate_mb": 1
+        },
+        "error": null,
+        "recovery": {
+          "mechanism": "none_local_inprocess"
+        },
+        "decision_rationale": [
+          "decide_placement failed: ModuleNotFoundError: No module named 'transformers'",
+          "strategy='autopilot' chose local-baseline (target=local, predicted_cost_usd=6.989041958333759e-06)",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean",
+          "advisor: cpu/fp32/baseline (confidence=medium)",
+          "runtime prediction source: measured_history_mean"
+        ],
+        "warnings": [
+          "router placement unavailable \u2014 Autopilot continues with measured pool query"
+        ],
+        "job_id": null,
+        "timestamp": 1794567731.8824806,
+        "feedback": {
+          "runtime_seconds_delta": -0.00019988610002352747,
+          "cost_usd_delta": -2.776195833660098e-08,
+          "peak_memory_bytes_delta": null,
+          "success": true
+        }
+      }
+    ]
+  },
+  "markdown": "# Economic Autopilot benchmark\n\n| Strategy | Successes | Failures | Cost/success ($) | Avg completion (s) | Avg peak mem (B) | Avg recovery requeues |\n|---|---:|---:|---:|---:|---:|---:|\n| fixed | 3 | 0 | 7.0033e-06 | 0.0504237 | \u2014 | 0 |\n| cheapest | 3 | 0 | 6.97174e-06 | 0.0501965 | \u2014 | 0 |\n| autopilot | 3 | 0 | 6.96755e-06 | 0.0501664 | \u2014 | 0 |\n\nCost uses the configured hourly rate \u00d7 measured wall time (estimate only \u2014 not a billed cloud invoice).\n"
+}

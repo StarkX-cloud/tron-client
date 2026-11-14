@@ -158,10 +158,17 @@ def remote(fn=None, local_first: bool = True, **default_resources):
                 submit_payload["required_memory_gb"] = resources["memory_gb"]
 
             try:
+                import os as _os
+
+                _headers = {}
+                _submit_tok = _os.environ.get("TRON_SUBMIT_AUTH_TOKEN") or None
+                if _submit_tok:
+                    _headers["X-TRON-AUTH"] = _submit_tok
                 r = requests.post(
                     f"{queue_url}/submit",
                     json=submit_payload,
-                    timeout=10
+                    headers=_headers or None,
+                    timeout=10,
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -178,7 +185,11 @@ def remote(fn=None, local_first: bool = True, **default_resources):
             # Create status function for MagicFuture
             def status_fn(jid):
                 try:
-                    resp = requests.get(f"{queue_url}/status/{jid}", timeout=5)
+                    resp = requests.get(
+                        f"{queue_url}/status/{jid}",
+                        headers=_headers or None,
+                        timeout=5,
+                    )
                     return resp.json()
                 except Exception as e:
                     return {"status": "error", "error": str(e)}

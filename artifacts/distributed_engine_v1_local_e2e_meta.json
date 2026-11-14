@@ -1,0 +1,7 @@
+{
+  "kind": "same_host_two_worker_process_e2e",
+  "multi_machine": false,
+  "note": "Coordination proof only. Multi-machine claim requires Linode artifact.",
+  "pytest_file": "artifacts/distributed_engine_v1_pytest.txt",
+  "timestamp_utc": "2026-11-13T18:56:00Z"
+}

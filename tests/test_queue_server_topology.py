@@ -89,7 +89,7 @@ def test_high_latency_worker_is_routed_the_lighter_of_two_queued_jobs(client):
     tc.post("/submit", json={"function": "heavy-fn", "priority": 5, "compute_weight": 20, "memory_gb": 1})
     tc.post("/submit", json={"function": "light-fn", "priority": 5, "compute_weight": 1, "memory_gb": 1})
 
-    job = tc.get("/next_job/far").json()["job"]
+    job = tc.get("/next_job/far", headers={"X-TRON-AUTH": token}).json()["job"]
     assert job is not None
     assert job["function"] == "light-fn"
 
@@ -118,7 +118,7 @@ def test_match_cycle_solves_the_cross_worker_case_next_job_alone_cannot(client):
 
     # Whichever worker polls next gets exactly its matched job, not
     # whatever its own local queue view would have argmax'd to.
-    near_job = tc.get("/next_job/near").json()["job"]
+    near_job = tc.get("/next_job/near", headers={"X-TRON-AUTH": near_token}).json()["job"]
     assert near_job["function"] == "heavy-fn"
 
 
@@ -234,8 +234,12 @@ def test_match_cycle_holds_a_transfer_when_the_worker_link_is_saturated(client):
     qs._run_match_cycle()
     assert set(qs.pending_assignment.keys()) == {"slow"}
 
-    tc.get("/next_job/slow")                 # claim it (reserves 29 MB on the link)
-    tc.post(f"/complete/{job1_id}", json={"result": {}})   # done — but the link is still cooling
+    tc.get("/next_job/slow", headers={"X-TRON-AUTH": token})  # claim it (reserves 29 MB on the link)
+    tc.post(
+        f"/complete/{job1_id}",
+        json={"result": {}},
+        headers={"X-TRON-AUTH": token},
+    )  # done — but the link is still cooling
     _heartbeat(tc, "slow", token, latency_ms=10.0, bandwidth_mbps_down=8.0)
 
     # a second big transfer: 29 + 2 > 30 MB budget -> held
@@ -260,7 +264,7 @@ def test_dead_worker_requeue_frees_the_load_shaper_budget(client):
     r = tc.post("/submit", json={"function": "fn", "priority": 5, "transfer_bytes": 1_900_000})
     job_id = r.json()["job_id"]
     qs._run_match_cycle()
-    tc.get("/next_job/slow")
+    tc.get("/next_job/slow", headers={"X-TRON-AUTH": token})
     assert qs.load_shaper.inflight_bytes("slow") > 0
 
     qs.load_shaper.release(job_id)

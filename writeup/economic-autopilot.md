@@ -1,0 +1,213 @@
+# TRON Economic Autopilot
+
+**Status:** integrated v0.1 — thin orchestration over existing TRON components.  
+**Not:** a GPU marketplace, distributed VRAM layer, or cloud provisioner.
+
+## Objective
+
+A user submits an AI workload with budget, deadline, and reliability. Autopilot
+determines resources, feasible machines, cost-minimizing configuration, memory
+fit, placement, recovery contract, and predicted-vs-actual feedback — by
+**connecting** four already-built capabilities:
+
+| Capability | Existing component | Autopilot use |
+|---|---|---|
+| Intelligent placement | `tron_router`, `tron/spine/matcher`, topology | candidates + pooled handoff |
+| GPU / memory optimization | `tron_efficiency.advisor` + policies | resource/config recommendation |
+| Execution safety | `queue_server` watchdog, `MAX_JOB_REQUEUE_ATTEMPTS`, `required_memory_gb` | declared safety contract; forward hard memory |
+| Real cost measurement | user hourly rate × wall time; optional `tron_costtrace` for API $ | predicted vs actual ledger |
+
+## Architecture
+
+```
+WorkloadSpec (budget, deadline, reliability, hourly_rate)
+        │
+        ▼
+┌───────────────────┐     recommend()      ┌────────────────────┐
+│ EconomicAutopilot │◄────────────────────►│ tron_efficiency    │
+│ plan()            │     query_pool /     │ advisor + hardware │
+│                   │     decide_placement │                    │
+│                   │◄────────────────────►│ tron_router        │
+└─────────┬─────────┘                      └────────────────────┘
+          │ candidates + rationale + safety_summary()
+          ▼
+   WorkloadPlan ──► DecisionLog (JSONL)
+          │
+          ▼
+   execute_plan()
+      ├─ local  → run callable in-process
+      └─ pooled → tron_router.handoff.submit_to_pool
+                    → queue_server / matcher / workers
+                    → watchdog requeue on worker death
+          │
+          ▼
+   ExecutionOutcome (actual cost/runtime/memory/success)
+          │
+          ▼
+   RuntimeHistory (measured means for next prediction)
+```
+
+### Component interfaces
+
+- **`WorkloadSpec`** — user intent + economic constraints (`tron_autopilot/types.py`)
+- **`EconomicAutopilot.plan(spec, strategy=)`** — builds candidates, selects one
+- **`execute_plan(plan, func=...)`** — acts on the plan without re-deciding
+- **`DecisionLog` / `RuntimeHistory`** — audit trail + measured prediction fuel
+- **Strategies** — `fixed` | `cheapest` | `autopilot` share one executor
+
+### What Autopilot deliberately does *not* do
+
+- Rewrite matcher / advisor / watchdog
+- Provision `dedicated` machines or call a cloud GPU API
+- Claim distributed VRAM aggregation
+- Checkpoint arbitrary cloudpickle callables (not technically supported)
+- Fabricate runtimes when no history and no `expected_runtime_seconds` exist
+  (predicted cost stays `None`; selection falls back to router target among feasible options)
+
+## Validation
+
+```bash
+# Unit + e2e (includes live uvicorn master + recovery evidence)
+python3 -m pytest tests/test_autopilot_engine.py tests/test_autopilot_e2e.py -q
+
+# Repeatable benchmark (synthetic workload body; real decision path)
+python3 -m benchmarks.economic_autopilot --trials 3 --out artifacts/economic_autopilot_benchmark.json
+
+# Same with a real same-host worker pool
+python3 -m benchmarks.economic_autopilot --live-pool --trials 2 \
+  --out artifacts/economic_autopilot_benchmark_live_pool.json
+```
+
+Metrics reported: cost per successful workload, completion time, peak memory
+(local), failure rate, recovery requeue counts.
+
+### Preserved results (this environment)
+
+**No live pool** (`artifacts/economic_autopilot_benchmark.json`, 3 trials):
+all three strategies succeed locally at ~0.050s; cost/success ≈ $7.0e-6 at
+$0.50/hr (pool unreachable → cheapest/autopilot cannot take the cheaper
+pooled rate).
+
+**Same-host live pool** (`artifacts/economic_autopilot_benchmark_live_pool.json`,
+2 trials, pooled rate $0.20/hr):
+
+| Strategy | Successes | Cost/success | Avg completion |
+|---|---:|---:|---:|
+| fixed | 2 | ~$7.0e-6 | ~0.051s (local baseline) |
+| cheapest | 2 | ~$1.8e-5 | ~0.28s (pooled; queue overhead) |
+| autopilot | 2 | ~$7.0e-6 | ~0.050s (local after feedback) |
+
+Cheapest naively routes to the lower hourly rate and pays more in wall-clock
+once pool overhead is measured. Autopilot’s `RuntimeHistory` absorbs that
+~0.28s pooled sample from the cheapest trials and then prefers local for the
+same synthetic job — predicted-vs-actual feedback changing the next decision,
+not a hard-coded “always local” rule.
+
+**Failure recovery evidence:** `tests/test_autopilot_e2e.py::test_autopilot_recovery_after_dead_worker`
+— dead worker claims a pooled Autopilot job, watchdog requeues (`requeued`
+spine event + `requeue_count >= 1`), second worker completes, original future
+resolves.
+
+## Production readiness (this iteration)
+
+| Gap | Status |
+|---|---|
+| Queue `/submit` auth (`TRON_SUBMIT_AUTH_TOKEN`) | **Built** — opt-in; unset keeps local tests open |
+| Worker `auth_token` leaked on `GET /workers` | **Fixed** — redacted |
+| Autopilot HTTP API | **Built** — `tron_autopilot.api` (`/plan`, `/run`, `/fleet`, `/pricing/skus`) |
+| GPU SKU hourly table | **Built** — `tron_autopilot.pricing` (pinned snapshot) |
+| Workers advertise `sku` / `hourly_rate_usd` | **Built** — `TRON_WORKER_SKU`, `TRON_WORKER_HOURLY_RATE` |
+| `costtrace_task` ledger | **Wired** — compute $ recorded on execute |
+| Dedicated provisioner | **Built (opt-in)** — `TRON_DEDICATED_PROVISIONER=linode` |
+| CUDA Autopilot (410m T4) | **Proven** — artifact on PR |
+| CUDA 1.4b | Notebook ready — `scripts/cuda_colab_proof_1_4b.ipynb` |
+| Checkpoint arbitrary callables | Still unsupported (honest refuse) |
+| Untrusted multi-tenant sandbox | Still out of scope (containers/seccomp) |
+
+## Real efficiency bridge (this iteration)
+
+`tron_autopilot/efficiency_exec.py` wires advisor-chosen `baseline` /
+`offload` into real `BaselinePolicy` / `OffloadPolicy` + `run_workload`.
+CLI/benchmark: `--real-model`. Measured load+e2e, tok/s, and peak CPU/GPU
+memory flow into `ExecutionOutcome.metrics` and `RuntimeHistory`.
+
+Preserved CPU run (`artifacts/economic_autopilot_real_model_benchmark.json`,
+`EleutherAI/pythia-70m`, 8 tokens, `cuda_available=False` on this host):
+
+```bash
+python3 -m benchmarks.economic_autopilot --real-model --trials 2 --max-new-tokens 8
+```
+
+First trial of a cold process pays Hub/cache load cost; later trials reflect
+steady-state. Autopilot does **not** claim CUDA results on this machine.
+
+Local-only for real models: pool workers are not assumed to ship
+torch/transformers (stated in outcomes if a pooled plan is asked to run
+efficiency).
+
+### CUDA proof (Colab Tesla T4)
+
+Preserved: `artifacts/economic_autopilot_cuda_benchmark.json`
+(`EleutherAI/pythia-410m`, 16 tokens, `cuda_available=true`, Tesla T4 ~14.6 GiB).
+
+| Strategy | Successes | Cost/success | Avg completion | Peak GPU alloc | tok/s |
+|---|---:|---:|---:|---:|---:|
+| fixed | 1 | ~$0.00222 | ~16.0 s (cold load) | 822 MB | ~47.6 |
+| cheapest | 1 | ~$0.000166 | ~1.19 s | 822 MB | ~52.9 |
+| autopilot | 1 | ~$0.000160 | ~1.16 s | 822 MB | ~52.8 |
+
+Advisor chose `cuda` / `fp16` / `baseline` (weights ~810 MB fit T4 usable budget). Device in outcomes is `cuda`. First trial pays Hub/cold load; later trials use measured history. Not a pooled GPU fleet proof.
+
+## Fleet capacity (toward “Computing Without Limits”)
+
+Workers now advertise `efficiency_runtime` (torch/transformers/accelerate
+importable) and report **system RAM** when they have no GPU (so the matcher
+stops seeing CPU nodes as 0 GB). `tron_autopilot.fleet.query_fleet_capacity`
+summarizes measured fleet memory/GPU/efficiency workers. Autopilot’s
+`requires_efficiency_runtime` refuses to pool real-model jobs onto workers
+that never claimed that capability. Pooled real-model execution goes through
+`pooled_efficiency.run_efficiency_job` on those workers; recovery remains the
+existing watchdog.
+
+### Scorecard vs “Computing Without Limits”
+
+| Layer | Status |
+|---|---|
+| Decide where/how under budget+deadline+reliability | **Built** (Autopilot) |
+| Memory-fit + recovery on unreliable nodes | **Built** |
+| Measured cost feedback | **Built** |
+| Real LLM body (Baseline/Offload) | **Built** (local; pooled when workers advertise) |
+| Cross-machine capacity visibility | **Built** (fleet snapshot) |
+| CUDA economics at 410m | **Proven** (Colab T4; see artifact) — 1.4b still open |
+| Auto-provision dedicated nodes | **Built (opt-in Linode)** — destroys after run |
+| HTTP control plane for companies | **Built** (`uvicorn tron_autopilot.api:app`) |
+| Multi-tenant untrusted rental | **Out of scope** (needs container isolation) |
+
+**Product read:** TRON is the control plane AI teams plug into — plan/run over
+HTTP, attach workers (or opt-in provision), measure cost, recover failures.
+“Without limits” = never invent capacity; expand by attaching/provisioning real
+machines. Supply scales with your fleet + provisioner.
+
+### Integrate (company path)
+
+```bash
+# Master
+TRON_SUBMIT_AUTH_TOKEN=… uvicorn queue_server:app --port 9000
+
+# Worker(s)
+TRON_MASTER_URL=http://master:9000 TRON_WORKER_SKU=g2-gpu-rtx4000a1-s \
+  TRON_SUBMIT_AUTH_TOKEN=… python worker.py
+
+# Autopilot API
+TRON_AUTOPILOT_API_TOKEN=… uvicorn tron_autopilot.api:app --port 9100
+# POST /plan  POST /run  GET /fleet
+```
+
+### CUDA proof paths (status)
+
+| Path | Status |
+|---|---|
+| `scripts/cuda_colab_proof.ipynb` | **Done** — T4 / pythia-410m artifact |
+| `scripts/cuda_colab_proof_1_4b.ipynb` | Ready — run on Colab T4 for 1.4b |
+| `scripts/cuda_linode_proof.py` | GPU plans account-gated; CPU Nanode OK |
+| `TRON_DEDICATED_PROVISIONER=linode` | Opt-in attach + teardown |

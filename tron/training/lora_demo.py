@@ -27,6 +27,7 @@ import os
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 import copy
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,20 +54,30 @@ def load_base_model_and_tokenizer(model_name: str = MODEL_NAME):
     return model, tokenizer
 
 
+# peft's LoRA init (and callers' base_model factories) draw from the
+# process-global torch RNG. Concurrent wire shards used to interleave
+# seeding + init and produce different adapters for the same seed —
+# breaking tensor-for-tensor parity. RLock so factory+make can share one
+# critical section. Training itself (dropout=0) is deterministic given
+# identical starting weights.
+_LORA_INIT_LOCK = threading.RLock()
+
+
 def make_lora_model(base_model, seed: int = 0):
     """Wrap a fresh copy of base_model in an independently-initialized
     LoRA adapter. Each call returns its own model so multiple "shards"
     never share adapter weights by accident."""
-    torch.manual_seed(seed)
-    config = LoraConfig(
-        r=8,
-        lora_alpha=16,
-        target_modules=["query_key_value"],
-        lora_dropout=0.0,
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-    return get_peft_model(copy.deepcopy(base_model), config)
+    with _LORA_INIT_LOCK:
+        torch.manual_seed(seed)
+        config = LoraConfig(
+            r=8,
+            lora_alpha=16,
+            target_modules=["query_key_value"],
+            lora_dropout=0.0,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        return get_peft_model(copy.deepcopy(base_model), config)
 
 
 def load_corpus_token_ids(tokenizer, path: Path = DATA_PATH) -> torch.Tensor:

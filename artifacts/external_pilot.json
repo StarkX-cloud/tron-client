@@ -1,0 +1,116 @@
+{
+  "pilot": "external_developer_workflow",
+  "success": true,
+  "customer_id": "pilot-dev-1",
+  "provider": {
+    "provider_id": "prov_d40216c626a0",
+    "worker_name": "pilot-w0",
+    "contact": "pilot@example.com",
+    "region": "local-lab",
+    "sku": "g6-nanode-1",
+    "hourly_rate_usd": 0.0075,
+    "memory_gb": 1.0,
+    "efficiency_runtime": false,
+    "cuda_advertised": false,
+    "verified": true,
+    "verified_at": 1794601061.4654894,
+    "verified_by": "pilot-harness",
+    "registered_at": 1794601061.4651537,
+    "last_seen_at": 1794601061.4683948,
+    "master_url": "http://127.0.0.1:35355",
+    "metadata": {}
+  },
+  "provider_verified": true,
+  "health_sync": {
+    "alive_workers": [
+      "pilot-w0"
+    ],
+    "providers_touched": 1,
+    "providers_total": 1
+  },
+  "fleet": {
+    "master_url": "http://127.0.0.1:35355",
+    "reachable": true,
+    "error": null,
+    "alive_count": 1,
+    "efficiency_worker_count": 1,
+    "gpu_worker_count": 0,
+    "total_memory_gb": 16.780623872,
+    "total_free_memory_gb": 4.074819584,
+    "workers": [
+      {
+        "name": "pilot-w0",
+        "memory_gb": 16.780623872,
+        "free_memory_gb": 4.074819584,
+        "gpu": false,
+        "efficiency_runtime": true,
+        "latency_ms": 2.2179015214443205,
+        "bandwidth_mbps": null,
+        "sku": "g6-nanode-1",
+        "hourly_rate_usd": 0.0075,
+        "location": "self-hosted",
+        "max_concurrent_jobs": 1,
+        "cpu_count": 4,
+        "quarantined": false
+      }
+    ],
+    "min_hourly_rate_usd": 0.0075,
+    "limits_honestly": [
+      "capacity is only what registered workers report right now",
+      "dedicated provisioner is opt-in via TRON_DEDICATED_PROVISIONER",
+      "efficiency_runtime must be true on a worker to run real-model jobs there"
+    ]
+  },
+  "trust": {
+    "submit_auth_required": true,
+    "autopilot_auth_required": true,
+    "sandbox": "process_timeout_and_rlimit_only",
+    "notes": [
+      "Worker auth_token required for heartbeat/claim/complete",
+      "Provider verified flag is operator attestation",
+      "No container/seccomp multi-tenant isolation in v1",
+      "No payment rails or custody \u2014 usage hooks only"
+    ]
+  },
+  "pooled_callable_result": {
+    "sum": 13,
+    "product": 42
+  },
+  "plan_chosen": "pooled",
+  "run_outcome": {
+    "success": true,
+    "target": "distributed",
+    "actual_runtime_seconds": 0.5122022150026169,
+    "actual_cost_usd": 1.0670879479221185e-06,
+    "metrics": {
+      "distributed": true,
+      "n_shards": 2,
+      "attempts_total": 2,
+      "duplicates_suppressed": 0,
+      "comm_predicted_seconds": 0.007266897391411988,
+      "actual_comm_seconds": 0.007266897391411988,
+      "comm_seconds_basis": "predicted_cost_model",
+      "expected_total": 20540,
+      "got_total": 20540
+    },
+    "error": null
+  },
+  "usage_report": {
+    "customer_id": "pilot-dev-1",
+    "since": null,
+    "until": null,
+    "events": 2,
+    "successes": 2,
+    "failures": 0,
+    "total_cost_usd_estimate": 1.0670879479221185e-06,
+    "total_runtime_seconds": 0.5170082567201462,
+    "note": "cost_usd is hourly_rate \u00d7 wall time \u2014 an estimate for external billing systems, not a TRON-issued invoice or custody transfer"
+  },
+  "usage_events": 2,
+  "honesty": [
+    "Same-host pilot for control-plane workflow reproducibility",
+    "Multi-machine execution proven separately in distributed_multi_machine_proof.json",
+    "No financial custody \u2014 usage costs are estimates for external billing",
+    "Worker trust = operator-verified providers; not a multi-tenant sandbox"
+  ]
+}
