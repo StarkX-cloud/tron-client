@@ -219,6 +219,90 @@ def usage_sla(
     )
 
 
+class FeedbackRequest(BaseModel):
+    plan_id: str
+    met_requirements: bool
+    rating: int | None = None
+    notes: str | None = None
+    customer_id: str | None = None
+    tenant_id: str | None = None
+    categories: list[str] | None = None
+
+
+@app.get("/experience/stats")
+def experience_stats(x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH")):
+    """Intelligence dashboard data — real ledger/model metrics only."""
+    _require_api_auth(x_tron_auth)
+    from tron_experience.stats import intelligence_snapshot
+
+    return intelligence_snapshot()
+
+
+@app.get("/experience/models")
+def experience_models(x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH")):
+    _require_api_auth(x_tron_auth)
+    from tron_experience.governance import ModelRegistry
+
+    reg = ModelRegistry()
+    active = reg.active()
+    return {
+        "active": active.to_dict() if active else None,
+        "versions": reg.list_versions(),
+    }
+
+
+@app.post("/experience/feedback")
+def experience_feedback(
+    req: FeedbackRequest,
+    x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH"),
+):
+    _require_api_auth(x_tron_auth)
+    from tron_experience.feedback import DeveloperFeedback, FeedbackStore
+
+    FeedbackStore().submit(
+        DeveloperFeedback(
+            plan_id=req.plan_id,
+            met_requirements=req.met_requirements,
+            rating=req.rating,
+            notes=req.notes,
+            customer_id=req.customer_id,
+            tenant_id=req.tenant_id,
+            categories=list(req.categories or []),
+        )
+    )
+    return {"ok": True}
+
+
+@app.post("/experience/train")
+def experience_train(
+    decision_log: str | None = None,
+    promote_if_better: bool = True,
+    x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH"),
+):
+    """Train from real DecisionLog / ledger rows. No fabricated data."""
+    _require_api_auth(x_tron_auth)
+    from tron_experience.ledger import ExperienceLedger
+    from tron_experience.learn import ExperienceLearner
+
+    ledger = ExperienceLedger()
+    if decision_log:
+        ledger.ingest_decision_log(decision_log)
+    records = ledger.read_all()
+    if len(records) < 6:
+        # Also try default autopilot artifacts if ledger thin.
+        for path in (
+            "artifacts/autopilot_decisions.jsonl",
+            os.environ.get("TRON_AUTOPILOT_LOG", "tron_autopilot_decisions.jsonl"),
+        ):
+            if path and os.path.exists(path):
+                ledger.ingest_decision_log(path)
+        records = ledger.read_all()
+    report = ExperienceLearner().train(
+        records, promote_if_better=promote_if_better
+    )
+    return report.to_dict()
+
+
 # Static Autopilot console (same pattern as tron_efficiency /dashboard).
 _dashboard_dir = os.path.join(os.path.dirname(__file__), "dashboard")
 if os.path.isdir(_dashboard_dir):
@@ -228,4 +312,17 @@ if os.path.isdir(_dashboard_dir):
         "/dashboard",
         StaticFiles(directory=_dashboard_dir, html=True),
         name="autopilot_dashboard",
+    )
+
+_experience_dash = os.path.join(
+    os.path.dirname(__file__), "..", "tron_experience", "dashboard"
+)
+_experience_dash = os.path.abspath(_experience_dash)
+if os.path.isdir(_experience_dash):
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount(
+        "/experience/dashboard",
+        StaticFiles(directory=_experience_dash, html=True),
+        name="experience_dashboard",
     )

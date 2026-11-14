@@ -183,6 +183,18 @@ class EconomicAutopilot:
         hist = self.history.mean_runtime(key)
         if hist is not None:
             return hist, "measured_history_mean"
+        # Experience Engine (opt-in): soft fill when exact history is missing.
+        # Never bypasses budget/memory/reliability feasibility gates below.
+        try:
+            from tron_experience.bridge import predict_runtime_for_spec
+
+            exp_rt, exp_src = predict_runtime_for_spec(
+                spec, target, policy, device, dtype
+            )
+            if exp_rt is not None:
+                return float(exp_rt), exp_src
+        except Exception:  # noqa: BLE001 — experience must never break planning
+            pass
         if spec.expected_runtime_seconds is not None:
             return float(spec.expected_runtime_seconds), "user_expected_runtime"
         return None, "unknown_no_history_or_user_hint"
@@ -688,6 +700,13 @@ class EconomicAutopilot:
     def record_feedback(self, plan: WorkloadPlan, outcome) -> None:
         """Persist outcome and update measured runtime history on success."""
         self.decision_log.append_outcome(outcome)
+        # Experience ledger — all outcomes (success and failure) for learning.
+        try:
+            from tron_experience.bridge import record_experience_from_feedback
+
+            record_experience_from_feedback(plan, outcome)
+        except Exception:  # noqa: BLE001
+            pass
         if not outcome.success or plan.chosen is None:
             return
         key = RuntimeHistory.key(

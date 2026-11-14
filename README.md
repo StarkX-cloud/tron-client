@@ -412,6 +412,14 @@ benchmark notes, limitations, and the next milestone:
 This is **not** a GPU marketplace and does not provision `dedicated`
 infrastructure or claim distributed VRAM.
 
+## Experience Engine (`tron_experience/`)
+
+Learns runtime/cost patterns from real Autopilot DecisionLog outcomes
+(fingerprints never include prompts/code). Opt-in soft predictions via
+`TRON_EXPERIENCE_ENABLED=true` — never bypasses budget/memory/reliability
+gates. Dashboard: `/experience/dashboard`. Proof:
+`python3 scripts/experience_engine_proof.py`.
+
 ## External pilot / SDK (`tron_pilot/`)
 
 Production surface for independent developers and compute providers:

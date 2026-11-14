@@ -353,6 +353,14 @@ technical design behind each phase.
   plan/run/fleet/submit, Autopilot `/trust` `/providers` `/usage`,
   external pilot harness → `artifacts/external_pilot.json`. Docs:
   `writeup/global-compute-pilot.md`, `docs/integration.md`.
+- [x] **Experience Engine (`tron_experience/`):** workload fingerprint +
+  intelligence ledger from real DecisionLog outcomes; learning pipeline
+  with holdout vs naive baseline; model versioning/rollback; soft
+  Autopilot prediction fill (`TRON_EXPERIENCE_ENABLED`); developer
+  feedback; governance (tenant isolation, retention, shared opt-in);
+  intelligence dashboard `/experience/dashboard`. Proof:
+  `artifacts/experience_engine_proof.json`. Write-up:
+  `writeup/experience-engine.md`. Never bypasses hard constraints.
 - [x] `tron/gpu/` OpenAI-compatible gateway now has `tron/gpu/README.md`
   documenting the `tron.gpu.*` layout (cluster / runtime / scheduler /
   openai_bridge), how to run the bridge (with the mocked-proxy test

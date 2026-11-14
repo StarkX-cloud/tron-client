@@ -22,3 +22,7 @@ tron_autopilot_history.json
 tron_provider_stats.jsonl
 tron_providers.json
 tron_usage.jsonl
+tron_experience_ledger.jsonl
+tron_experience_models.json
+tron_experience_feedback.jsonl
+tron_experience_artifacts/
