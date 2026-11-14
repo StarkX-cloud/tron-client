@@ -171,3 +171,38 @@ def test_intelligence_snapshot(tmp_path):
     )
     assert snap["workloads_observed"] == 1
     assert "cpu-lab" in snap["hardware_performance_profiles"]
+
+
+def test_flywheel_six_stages(tmp_path):
+    from tron_experience.flywheel import score_flywheel
+
+    ledger = ExperienceLedger(tmp_path / "l.jsonl")
+    for i in range(5):
+        ledger.append(
+            ExperienceRecord(
+                plan_id=f"p{i}",
+                fingerprint=WorkloadFingerprint(
+                    model_name=f"m{i%2}",
+                    target="local" if i % 2 == 0 else "pooled",
+                    policy="baseline",
+                    device="cpu",
+                    dtype="fp32",
+                ),
+                predicted_runtime_seconds=0.1 * (i + 1),
+                actual_runtime_seconds=0.1 * (i + 1) * 1.05,
+                predicted_cost_usd=0.01,
+                actual_cost_usd=0.011,
+                success=True,
+                timestamp=1000 + i,
+            )
+        )
+    fw = score_flywheel(
+        ledger=ledger,
+        registry=ModelRegistry(tmp_path / "m.json"),
+        fleet={"alive_count": 2, "workers": [{}, {}]},
+    )
+    assert len(fw["hierarchy"]) == 6
+    assert fw["hierarchy"][0]["stage_id"] == "acquire"
+    assert fw["hierarchy"][-1]["stage_id"] == "compound"
+    assert "execution intelligence" in fw["thesis"].lower() or "data teaches" in fw["thesis"].lower()
+    assert fw["flywheel_health"] is not None

@@ -361,6 +361,10 @@ technical design behind each phase.
   intelligence dashboard `/experience/dashboard`. Proof:
   `artifacts/experience_engine_proof.json`. Write-up:
   `writeup/experience-engine.md`. Never bypasses hard constraints.
+- [x] **Intelligence flywheel (company hierarchy):** acquire → accumulate
+  → convert → economics → attract → compound — measured in
+  `tron_experience/flywheel.py`, API `GET /experience/flywheel`, docs
+  `writeup/intelligence-flywheel.md` + ARCHITECTURE company bet.
 - [x] `tron/gpu/` OpenAI-compatible gateway now has `tron/gpu/README.md`
   documenting the `tron.gpu.*` layout (cluster / runtime / scheduler /
   openai_bridge), how to run the bridge (with the mocked-proxy test

@@ -5,6 +5,23 @@ real training and compute workloads across heterogeneous, unreliable nodes
 with near-zero communication overhead — with a live, causal 3D replay of
 what the cluster is doing.**
 
+## The company bet (intelligence flywheel)
+
+The durable advantage is not owning GPUs. It is **execution intelligence**
+accumulated across real workloads:
+
+1. **Acquire** computational workloads  
+2. **Accumulate** high-quality execution intelligence  
+3. **Convert** experience into better algorithms  
+4. **Improve** compute economics  
+5. **Attract** more workloads and infrastructure  
+6. **Compound** the intelligence advantage  
+
+The machines execute the work. The data teaches TRON how to execute it
+better. Product surface: `tron_experience/` (ledger, learner, governance)
+scored by `tron_experience.flywheel.score_flywheel` and shown on
+`/experience/flywheel` + `/experience/dashboard`.
+
 This is not a rental-compute marketplace. That was an earlier direction
 (billing, royalties, customer accounts) and it has been removed — see
 "What was cut" below.

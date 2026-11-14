@@ -238,6 +238,24 @@ def experience_stats(x_tron_auth: str | None = Header(default=None, alias="X-TRO
     return intelligence_snapshot()
 
 
+@app.get("/experience/flywheel")
+def experience_flywheel(
+    master_url: str | None = None,
+    x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH"),
+):
+    """Company intelligence hierarchy — measured from real execution data."""
+    _require_api_auth(x_tron_auth)
+    from tron_autopilot.fleet import query_fleet_capacity
+    from tron_experience.flywheel import score_flywheel
+
+    fleet = None
+    try:
+        fleet = query_fleet_capacity(master_url=master_url).to_dict()
+    except Exception:  # noqa: BLE001
+        fleet = None
+    return score_flywheel(fleet=fleet)
+
+
 @app.get("/experience/models")
 def experience_models(x_tron_auth: str | None = Header(default=None, alias="X-TRON-AUTH")):
     _require_api_auth(x_tron_auth)
